@@ -25,11 +25,31 @@ SmartAttendanceAI is an AI-based attendance system using face recognition to aut
 * YOLOv8 pre-trained face detection model
 * Face embeddings for identity matching
 
-## Deployment
+## How to Run
 
-* Backend runs with FastAPI + Uvicorn
-* Frontend runs on React development server
-* Database initialized using provided SQL file
+### Backend
+
+```bash
+cd backend
+python -m venv venv
+venv\\Scripts\\activate   # Windows
+pip install -r requirements.txt
+uvicorn main:app --reload
+```
+
+### Frontend
+
+```bash
+cd frontend
+npm install
+npm start
+```
+
+### Database
+
+* Use SQL Server
+* Import the provided `.sql` file to initialize the database
+* Update database connection settings in backend config
 
 ## Use Case
 
