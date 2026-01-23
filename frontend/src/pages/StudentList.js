@@ -30,6 +30,7 @@ import {
   Visibility as ViewIcon,
   Edit as EditIcon,
   Delete as DeleteIcon,
+  Camera as CameraIcon,
 } from '@mui/icons-material';
 import { studentAPI } from '../services/api';
 
@@ -216,8 +217,17 @@ function StudentList() {
                           size="small"
                           color="primary"
                           onClick={() => handleViewStudent(student.ma_sv)}
+                          title="Xem chi tiết"
                         >
                           <ViewIcon />
+                        </IconButton>
+                        <IconButton
+                          size="small"
+                          color="secondary"
+                          onClick={() => navigate(`/students/${student.ma_sv}/training`)}
+                          title="Huấn luyện nhận diện"
+                        >
+                          <CameraIcon />
                         </IconButton>
                       </TableCell>
                     </TableRow>

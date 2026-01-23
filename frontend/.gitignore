@@ -30,3 +30,16 @@ yarn-error.log*
 
 # OS
 Thumbs.db
+# ===== Python / AI Backend =====
+venv/
+__pycache__/
+*.pyc
+
+# Datasets
+backend/dataset_cropped/
+backend/dataset_raw/
+
+# Models / Generated data
+backend/models/
+*.pkl
+*.pt
