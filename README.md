@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 # SmartAttendanceAI# SmartAttendanceAI
+=======
+# SmartAttendanceAI
+>>>>>>> fa2a1f221ae2c1b471d452baf6f63f95ef7c407b
 
 ## Overview
 
