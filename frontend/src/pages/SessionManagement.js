@@ -60,18 +60,22 @@ function SessionManagement() {
   }, []);
 
   const fetchTodaySessions = async () => {
-    try {
-      setLoading(true);
-      const response = await attendanceAPI.getTodaySessions();
-      setSessions(response.data);
-      setError(null);
-    } catch (err) {
-      console.error('Error fetching sessions:', err);
-      setError('Không thể tải danh sách buổi học');
-    } finally {
-      setLoading(false);
-    }
-  };
+  try {
+    setLoading(true);
+    const response = await attendanceAPI.getTodaySessions();
+    
+    console.log('📡 API Response:', response.data); // ← THÊM LOG
+    console.log('📊 Sessions count:', response.data.length);
+    
+    setSessions(response.data);
+    setError(null);
+  } catch (err) {
+    console.error('❌ Error details:', err.response || err); // ← LOG CHI TIẾT
+    setError('Không thể tải danh sách buổi học');
+  } finally {
+    setLoading(false);
+  }
+};
 
   const handleViewAttendance = async (session) => {
     try {
@@ -245,7 +249,7 @@ function SessionManagement() {
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <Box>
                   <Typography color="text.secondary" variant="body2">
-                    Tổng buổi hôm nay
+                    Tổng số buổi học
                   </Typography>
                   <Typography variant="h4" fontWeight="bold">
                     {sessions.length}

@@ -150,10 +150,10 @@ function AnalyticsReport() {
                 Sinh viên đủ điều kiện
               </Typography>
               <Typography variant="h3" color="success.main">
-                142/150
+                293/273
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                94.7% đủ điều kiện dự thi
+                90,76% đủ điều kiện dự thi
               </Typography>
             </CardContent>
           </Card>
@@ -166,7 +166,7 @@ function AnalyticsReport() {
                 Sinh viên nguy cơ
               </Typography>
               <Typography variant="h3" color="error.main">
-                8
+                20
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
                 Dưới 80% chuyên cần

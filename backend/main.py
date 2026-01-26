@@ -405,26 +405,106 @@ async def recognize_face_endpoint(file: UploadFile = File(...)):
 
 @app.get("/api/sessions/today")
 async def get_today_sessions():
+    """Lấy tất cả buổi học (không chỉ hôm nay) để debug"""
     conn = get_connection()
     cursor = conn.cursor()
     
+    # Query lấy TẤT CẢ buổi học để kiểm tra
     cursor.execute("""
-        SELECT bh.MaBuoi, bh.MaLHP, bh.NgayHoc, bh.GioBatDau,
-               lhp.GiangVien, mh.TenMon
+        SELECT 
+            bh.MaBuoi, 
+            bh.MaLHP, 
+            bh.NgayHoc, 
+            bh.GioBatDau,
+            lhp.GiangVien, 
+            mh.TenMon
         FROM BuoiHoc bh
         JOIN LopHocPhan lhp ON bh.MaLHP = lhp.MaLHP
         JOIN MonHoc mh ON lhp.MaMon = mh.MaMon
-        WHERE bh.NgayHoc = CAST(GETDATE() AS DATE)
-        ORDER BY bh.GioBatDau
+        ORDER BY bh.NgayHoc DESC, bh.GioBatDau
     """)
     
     sessions = []
     for row in cursor.fetchall():
+        try:
+            # Xử lý cẩn thận datetime
+            ngay_hoc = row[2].isoformat() if row[2] else None
+            
+            # Chuyển time object thành string HH:MM
+            if row[3]:
+                if isinstance(row[3], str):
+                    gio_bat_dau = row[3]
+                else:
+                    # Nếu là time object
+                    gio_bat_dau = row[3].strftime("%H:%M:%S")
+            else:
+                gio_bat_dau = None
+            
+            sessions.append({
+                "ma_buoi": row[0],
+                "ma_lhp": row[1],
+                "ngay_hoc": ngay_hoc,
+                "gio_bat_dau": gio_bat_dau,
+                "giang_vien": row[4],
+                "ten_mon": row[5]
+            })
+        except Exception as e:
+            print(f"Error processing row: {e}")
+            continue
+    
+    cursor.close()
+    conn.close()
+    
+    print(f"📊 Found {len(sessions)} sessions")  # Debug log
+    return sessions
+
+
+# Thêm endpoint mới để lọc theo ngày
+@app.get("/api/sessions/by-date")
+async def get_sessions_by_date(date: str = None):
+    """
+    Lấy buổi học theo ngày
+    date format: YYYY-MM-DD (vd: 2026-01-25)
+    Nếu không truyền date, lấy hôm nay
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    if date:
+        query = """
+            SELECT 
+                bh.MaBuoi, bh.MaLHP, bh.NgayHoc, bh.GioBatDau,
+                lhp.GiangVien, mh.TenMon
+            FROM BuoiHoc bh
+            JOIN LopHocPhan lhp ON bh.MaLHP = lhp.MaLHP
+            JOIN MonHoc mh ON lhp.MaMon = mh.MaMon
+            WHERE bh.NgayHoc = ?
+            ORDER BY bh.GioBatDau
+        """
+        cursor.execute(query, (date,))
+    else:
+        query = """
+            SELECT 
+                bh.MaBuoi, bh.MaLHP, bh.NgayHoc, bh.GioBatDau,
+                lhp.GiangVien, mh.TenMon
+            FROM BuoiHoc bh
+            JOIN LopHocPhan lhp ON bh.MaLHP = lhp.MaLHP
+            JOIN MonHoc mh ON lhp.MaMon = mh.MaMon
+            WHERE bh.NgayHoc = CAST(GETDATE() AS DATE)
+            ORDER BY bh.GioBatDau
+        """
+        cursor.execute(query)
+    
+    sessions = []
+    for row in cursor.fetchall():
+        ngay_hoc = row[2].isoformat() if row[2] else None
+        gio_bat_dau = row[3].strftime("%H:%M:%S") if row[3] else None
+        
         sessions.append({
             "ma_buoi": row[0],
             "ma_lhp": row[1],
-            "ngay_hoc": row[2].isoformat() if row[2] else None,
-            "gio_bat_dau": str(row[3]) if row[3] else None,
+            "ngay_hoc": ngay_hoc,
+            "gio_bat_dau": gio_bat_dau,
             "giang_vien": row[4],
             "ten_mon": row[5]
         })
@@ -432,7 +512,6 @@ async def get_today_sessions():
     cursor.close()
     conn.close()
     return sessions
-
 # ==================== ATTENDANCE APIs ====================
 
 @app.post("/api/attendance/checkin")
@@ -523,70 +602,350 @@ async def get_session_attendance(ma_buoi: int):
     conn.close()
     return records
 
-# ==================== ANALYTICS APIs ====================
+# ==================== ANALYTICS APIs - REAL DATA ====================
 
 @app.get("/api/analytics/dashboard")
 async def get_dashboard_stats():
+    """Lấy thống kê tổng quan cho dashboard"""
     conn = get_connection()
     cursor = conn.cursor()
     
-    cursor.execute("SELECT COUNT(*) FROM SinhVien WHERE TrangThai = N'Đang học'")
-    total_students = cursor.fetchone()[0]
+    try:
+        # Tổng số sinh viên đang học
+        cursor.execute("""
+            SELECT COUNT(*) FROM SinhVien 
+            WHERE TrangThai = N'Đang học'
+        """)
+        total_students = cursor.fetchone()[0]
+        
+        # Số buổi học hôm nay
+        cursor.execute("""
+            SELECT COUNT(*) FROM BuoiHoc 
+            WHERE NgayHoc = CAST(GETDATE() AS DATE)
+        """)
+        today_sessions = cursor.fetchone()[0]
+        
+        # Số lượt điểm danh hôm nay
+        cursor.execute("""
+            SELECT COUNT(*) FROM DiemDanh dd
+            JOIN BuoiHoc bh ON dd.MaBuoi = bh.MaBuoi
+            WHERE bh.NgayHoc = CAST(GETDATE() AS DATE)
+        """)
+        today_attendance = cursor.fetchone()[0]
+        
+        # Tỷ lệ đi trễ hôm nay
+        cursor.execute("""
+            SELECT 
+                ISNULL(
+                    CAST(COUNT(CASE WHEN dd.TrangThai = N'Trễ' THEN 1 END) AS FLOAT) * 100.0 / 
+                    NULLIF(COUNT(*), 0), 
+                    0
+                ) AS TyLeTre
+            FROM DiemDanh dd
+            JOIN BuoiHoc bh ON dd.MaBuoi = bh.MaBuoi
+            WHERE bh.NgayHoc = CAST(GETDATE() AS DATE)
+        """)
+        late_rate = cursor.fetchone()[0] or 0
+        
+        return {
+            "total_students": total_students,
+            "today_sessions": today_sessions,
+            "today_attendance": today_attendance,
+            "late_rate": float(late_rate)
+        }
+        
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.get("/api/analytics/attendance-trend")
+async def get_attendance_trend(days: int = 7):
+    """Lấy xu hướng điểm danh theo ngày"""
+    conn = get_connection()
+    cursor = conn.cursor()
     
-    cursor.execute("""
-        SELECT COUNT(*) FROM BuoiHoc 
-        WHERE NgayHoc = CAST(GETDATE() AS DATE)
-    """)
-    today_sessions = cursor.fetchone()[0]
+    try:
+        cursor.execute("""
+            SELECT 
+                CAST(bh.NgayHoc AS DATE) AS Ngay,
+                COUNT(DISTINCT CASE WHEN dd.TrangThai IN (N'Đúng giờ', N'Có mặt') THEN dd.MaDiemDanh END) AS CoMat,
+                COUNT(DISTINCT CASE WHEN dd.TrangThai = N'Trễ' THEN dd.MaDiemDanh END) AS Tre,
+                COUNT(DISTINCT bh.MaBuoi) AS TongBuoi
+            FROM BuoiHoc bh
+            LEFT JOIN DiemDanh dd ON bh.MaBuoi = dd.MaBuoi
+            WHERE bh.NgayHoc >= DATEADD(day, ?, CAST(GETDATE() AS DATE))
+                AND bh.NgayHoc <= CAST(GETDATE() AS DATE)
+            GROUP BY CAST(bh.NgayHoc AS DATE)
+            ORDER BY Ngay
+        """, (-days,))
+        
+        rows = cursor.fetchall()
+        
+        result = []
+        for row in rows:
+            ngay = row[0].strftime("%d/%m") if row[0] else ""
+            result.append({
+                "name": ngay,
+                "coMat": row[1],
+                "tre": row[2],
+                "vang": 0  # Có thể tính toán nếu cần
+            })
+        
+        return result
+        
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.get("/api/analytics/status-distribution")
+async def get_status_distribution():
+    """Phân bố trạng thái điểm danh"""
+    conn = get_connection()
+    cursor = conn.cursor()
     
-    cursor.execute("""
-        SELECT COUNT(*) FROM DiemDanh dd
-        JOIN BuoiHoc bh ON dd.MaBuoi = bh.MaBuoi
-        WHERE bh.NgayHoc = CAST(GETDATE() AS DATE)
-    """)
-    today_attendance = cursor.fetchone()[0]
+    try:
+        cursor.execute("""
+            SELECT 
+                dd.TrangThai,
+                COUNT(*) AS SoLuong
+            FROM DiemDanh dd
+            JOIN BuoiHoc bh ON dd.MaBuoi = bh.MaBuoi
+            WHERE bh.NgayHoc >= DATEADD(day, -7, GETDATE())
+            GROUP BY dd.TrangThai
+        """)
+        
+        rows = cursor.fetchall()
+        
+        result = []
+        for row in rows:
+            result.append({
+                "name": row[0],
+                "value": row[1]
+            })
+        
+        return result
+        
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.get("/api/analytics/top-students")
+async def get_top_students(limit: int = 5):
+    """Lấy danh sách sinh viên xuất sắc"""
+    conn = get_connection()
+    cursor = conn.cursor()
     
-    cursor.execute("""
-        SELECT ISNULL(
-            CAST(COUNT(CASE WHEN dd.TrangThai = N'Trễ' THEN 1 END) AS FLOAT) * 100.0 / 
-            NULLIF(COUNT(*), 0), 0
-        ) FROM DiemDanh dd
-        JOIN BuoiHoc bh ON dd.MaBuoi = bh.MaBuoi
-        WHERE bh.NgayHoc = CAST(GETDATE() AS DATE)
-    """)
-    late_rate = cursor.fetchone()[0] or 0
+    try:
+        cursor.execute("""
+            SELECT TOP (?) 
+                sv.MaSV,
+                sv.HoTen,
+                COUNT(DISTINCT dd.MaBuoi) AS SoBuoiCoMat,
+                COUNT(DISTINCT bh.MaBuoi) AS TongBuoi,
+                CAST(COUNT(DISTINCT dd.MaBuoi) * 100.0 / 
+                     NULLIF(COUNT(DISTINCT bh.MaBuoi), 0) AS DECIMAL(5,2)) AS TyLe
+            FROM SinhVien sv
+            JOIN DangKyHoc dk ON sv.MaSV = dk.MaSV
+            JOIN LopHocPhan lhp ON dk.MaLHP = lhp.MaLHP
+            JOIN BuoiHoc bh ON lhp.MaLHP = bh.MaLHP
+            LEFT JOIN DiemDanh dd ON dd.MaSV = sv.MaSV AND dd.MaBuoi = bh.MaBuoi
+            WHERE sv.TrangThai = N'Đang học'
+            GROUP BY sv.MaSV, sv.HoTen
+            HAVING COUNT(DISTINCT bh.MaBuoi) > 0
+            ORDER BY TyLe DESC, SoBuoiCoMat DESC
+        """, (limit,))
+        
+        rows = cursor.fetchall()
+        
+        result = []
+        for row in rows:
+            result.append({
+                "ma_sv": row[0],
+                "ho_ten": row[1],
+                "so_buoi": f"{row[2]}/{row[3]}",
+                "ty_le": float(row[4]) if row[4] else 0
+            })
+        
+        return result
+        
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.get("/api/analytics/at-risk-students")
+async def get_at_risk_students():
+    """Lấy danh sách sinh viên nguy cơ"""
+    conn = get_connection()
+    cursor = conn.cursor()
     
-    cursor.close()
-    conn.close()
+    try:
+        cursor.execute("""
+            SELECT 
+                sv.MaSV,
+                sv.HoTen,
+                COUNT(DISTINCT dd.MaBuoi) AS SoBuoiCoMat,
+                COUNT(DISTINCT bh.MaBuoi) AS TongBuoi,
+                CAST(COUNT(DISTINCT dd.MaBuoi) * 100.0 / 
+                     NULLIF(COUNT(DISTINCT bh.MaBuoi), 0) AS DECIMAL(5,2)) AS TyLe,
+                CASE 
+                    WHEN CAST(COUNT(DISTINCT dd.MaBuoi) * 100.0 / 
+                         NULLIF(COUNT(DISTINCT bh.MaBuoi), 0) AS DECIMAL(5,2)) < 60 
+                    THEN N'Nguy cơ cao'
+                    WHEN CAST(COUNT(DISTINCT dd.MaBuoi) * 100.0 / 
+                         NULLIF(COUNT(DISTINCT bh.MaBuoi), 0) AS DECIMAL(5,2)) < 80 
+                    THEN N'Cảnh báo'
+                    ELSE N'Bình thường'
+                END AS KetLuan
+            FROM SinhVien sv
+            JOIN DangKyHoc dk ON sv.MaSV = dk.MaSV
+            JOIN LopHocPhan lhp ON dk.MaLHP = lhp.MaLHP
+            JOIN BuoiHoc bh ON lhp.MaLHP = bh.MaLHP
+            LEFT JOIN DiemDanh dd ON dd.MaSV = sv.MaSV AND dd.MaBuoi = bh.MaBuoi
+            WHERE sv.TrangThai = N'Đang học'
+            GROUP BY sv.MaSV, sv.HoTen
+            HAVING CAST(COUNT(DISTINCT dd.MaBuoi) * 100.0 / 
+                   NULLIF(COUNT(DISTINCT bh.MaBuoi), 0) AS DECIMAL(5,2)) < 80
+            ORDER BY TyLe ASC
+        """)
+        
+        rows = cursor.fetchall()
+        
+        result = []
+        for row in rows:
+            result.append({
+                "ma_sv": row[0],
+                "ho_ten": row[1],
+                "so_buoi": f"{row[2]}/{row[3]}",
+                "ty_le": float(row[4]) if row[4] else 0,
+                "ket_luan": row[5]
+            })
+        
+        return result
+        
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.get("/api/analytics/class-comparison")
+async def get_class_comparison():
+    """So sánh chuyên cần giữa các lớp"""
+    conn = get_connection()
+    cursor = conn.cursor()
     
-    return {
-        "total_students": total_students,
-        "today_sessions": today_sessions,
-        "today_attendance": today_attendance,
-        "late_rate": float(late_rate)
-    }
+    try:
+        cursor.execute("""
+            SELECT 
+                sv.Lop,
+                COUNT(DISTINCT dd.MaBuoi) AS SoBuoiCoMat,
+                COUNT(DISTINCT bh.MaBuoi) AS TongBuoi,
+                CAST(COUNT(DISTINCT dd.MaBuoi) * 100.0 / 
+                     NULLIF(COUNT(DISTINCT bh.MaBuoi), 0) AS DECIMAL(5,2)) AS TyLe
+            FROM SinhVien sv
+            JOIN DangKyHoc dk ON sv.MaSV = dk.MaSV
+            JOIN LopHocPhan lhp ON dk.MaLHP = lhp.MaLHP
+            JOIN BuoiHoc bh ON lhp.MaLHP = bh.MaLHP
+            LEFT JOIN DiemDanh dd ON dd.MaSV = sv.MaSV AND dd.MaBuoi = bh.MaBuoi
+            WHERE sv.TrangThai = N'Đang học' AND sv.Lop IS NOT NULL
+            GROUP BY sv.Lop
+            HAVING COUNT(DISTINCT bh.MaBuoi) > 0
+            ORDER BY TyLe DESC
+        """)
+        
+        rows = cursor.fetchall()
+        
+        result = []
+        for row in rows:
+            result.append({
+                "lop": row[0],
+                "tyLe": float(row[3]) if row[3] else 0
+            })
+        
+        return result
+        
+    finally:
+        cursor.close()
+        conn.close()
+
 
 @app.get("/api/analytics/student/{ma_sv}")
 async def get_student_analytics(ma_sv: str):
+    """Lấy phân tích chi tiết cho 1 sinh viên"""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM VW_DieuKienDuThi WHERE MaSV = ?", (ma_sv,))
     
-    stats = []
-    for row in cursor.fetchall():
-        stats.append({
-            "ma_sv": row[0],
-            "ho_ten": row[1],
-            "ma_lhp": row[2],
-            "so_buoi_co_mat": row[3],
-            "tong_buoi": row[4],
-            "ty_le_chuyen_can": float(row[5]),
-            "ket_luan": row[6]
-        })
+    try:
+        cursor.execute("""
+            SELECT * FROM VW_DieuKienDuThi 
+            WHERE MaSV = ?
+        """, (ma_sv,))
+        
+        stats = []
+        for row in cursor.fetchall():
+            stats.append({
+                "ma_sv": row[0],
+                "ho_ten": row[1],
+                "ma_lhp": row[2],
+                "so_buoi_co_mat": row[3],
+                "tong_buoi": row[4],
+                "ty_le_chuyen_can": float(row[5]),
+                "ket_luan": row[6]
+            })
+        
+        return stats
+        
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.get("/api/analytics/recent-activities")
+async def get_recent_activities(limit: int = 10):
+    """Lấy hoạt động điểm danh gần đây"""
+    conn = get_connection()
+    cursor = conn.cursor()
     
-    cursor.close()
-    conn.close()
-    return stats
+    try:
+        cursor.execute("""
+            SELECT TOP (?)
+                dd.MaDiemDanh,
+                sv.MaSV,
+                sv.HoTen,
+                dd.ThoiGianQuet,
+                dd.TrangThai,
+                mh.TenMon,
+                bh.NgayHoc
+            FROM DiemDanh dd
+            JOIN SinhVien sv ON dd.MaSV = sv.MaSV
+            JOIN BuoiHoc bh ON dd.MaBuoi = bh.MaBuoi
+            JOIN LopHocPhan lhp ON bh.MaLHP = lhp.MaLHP
+            JOIN MonHoc mh ON lhp.MaMon = mh.MaMon
+            ORDER BY dd.ThoiGianQuet DESC
+        """, (limit,))
+        
+        rows = cursor.fetchall()
+        
+        result = []
+        for row in rows:
+            result.append({
+                "ma_diem_danh": row[0],
+                "ma_sv": row[1],
+                "ho_ten": row[2],
+                "thoi_gian": row[3].isoformat() if row[3] else None,
+                "trang_thai": row[4],
+                "mon_hoc": row[5],
+                "ngay_hoc": row[6].isoformat() if row[6] else None
+            })
+        
+        return result
+        
+    finally:
+        cursor.close()
+        conn.close()
 
 if __name__ == "__main__":
     import uvicorn

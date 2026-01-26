@@ -43,3 +43,13 @@ backend/dataset_raw/
 backend/models/
 *.pkl
 *.pt
+# Dataset
+backend/dataset_raw/
+backend/dataset_cropped/
+
+# Model
+*.pt
+*.pkl
+
+# Local folder
+diemdanh/
