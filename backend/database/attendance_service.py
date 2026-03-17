@@ -1,10 +1,6 @@
 from datetime import datetime, time
 from database.db import get_connection
 
-
-# =========================
-# LẤY DANH SÁCH BUỔI HỌC HÔM NAY (CHO FE)
-# =========================
 def get_today_sessions():
     conn = get_connection()
     cursor = conn.cursor()
@@ -37,9 +33,6 @@ def get_today_sessions():
     ]
 
 
-# =========================
-# KIỂM TRA ĐÃ ĐIỂM DANH CHƯA
-# =========================
 def da_diem_danh(ma_sv, ma_buoi):
     conn = get_connection()
     cursor = conn.cursor()
@@ -55,9 +48,7 @@ def da_diem_danh(ma_sv, ma_buoi):
     return count > 0
 
 
-# =========================
-# GHI ĐIỂM DANH
-# =========================
+
 def ghi_diem_danh(ma_sv, ma_buoi):
     conn = get_connection()
     cursor = conn.cursor()
