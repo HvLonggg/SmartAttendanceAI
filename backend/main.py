@@ -10,6 +10,7 @@ import pickle
 import base64
 import os
 import io
+from PIL import Image
 import torch
 from facenet_pytorch import InceptionResnetV1
 from ultralytics import YOLO
@@ -77,6 +78,47 @@ class StudentInfo(BaseModel):
     khoa: Optional[str]
     email: Optional[str]
     trang_thai: Optional[str]
+    anh_dai_dien: Optional[str] = None  # tên file trong thư mục avatars/ (vd: 2025001.jpg)
+
+
+AVATARS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "avatars")
+os.makedirs(AVATARS_DIR, exist_ok=True)
+
+
+def ensure_anh_dai_dien_column():
+    """Thêm cột AnhDaiDien nếu DB chưa có (SQL Server)."""
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            IF NOT EXISTS (
+                SELECT 1 FROM sys.columns
+                WHERE Name = N'AnhDaiDien' AND Object_ID = Object_ID(N'SinhVien')
+            )
+            ALTER TABLE SinhVien ADD AnhDaiDien NVARCHAR(500) NULL
+        """)
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print("✅ Cột AnhDaiDien (SinhVien) đã sẵn sàng")
+    except Exception as e:
+        print(f"⚠️ Không thể thêm cột AnhDaiDien: {e}")
+
+
+def sinhvien_row_to_student(row) -> StudentInfo:
+    row = tuple(row)
+    anh = None
+    if len(row) > 8 and row[8] is not None:
+        s = str(row[8]).strip()
+        anh = s if s else None
+    return StudentInfo(
+        ma_sv=row[0], ho_ten=row[1], ngay_sinh=row[2],
+        gioi_tinh=row[3], lop=row[4], khoa=row[5],
+        email=row[6], trang_thai=row[7], anh_dai_dien=anh,
+    )
+
+
+ensure_anh_dai_dien_column()
 
 # ==================== AI FUNCTIONS ====================
 
@@ -193,13 +235,7 @@ async def get_all_students():
     cursor.execute("SELECT * FROM SinhVien ORDER BY MaSV")
     rows = cursor.fetchall()
     
-    students = []
-    for row in rows:
-        students.append(StudentInfo(
-            ma_sv=row[0], ho_ten=row[1], ngay_sinh=row[2],
-            gioi_tinh=row[3], lop=row[4], khoa=row[5],
-            email=row[6], trang_thai=row[7]
-        ))
+    students = [sinhvien_row_to_student(row) for row in rows]
     
     cursor.close()
     conn.close()
@@ -216,12 +252,8 @@ async def get_student(ma_sv: str):
     
     if not row:
         raise HTTPException(status_code=404, detail="Sinh viên không tồn tại")
-    
-    return StudentInfo(
-        ma_sv=row[0], ho_ten=row[1], ngay_sinh=row[2],
-        gioi_tinh=row[3], lop=row[4], khoa=row[5],
-        email=row[6], trang_thai=row[7]
-    )
+
+    return sinhvien_row_to_student(row)
 
 @app.post("/api/students")
 async def create_student(student: StudentInfo):
