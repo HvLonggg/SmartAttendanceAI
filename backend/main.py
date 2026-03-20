@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
@@ -20,12 +20,15 @@ import pyodbc
 # Import training module
 from training_module import training_manager
 
+from auth_routes import auth_router as _auth_router, require_role
+
 app = FastAPI(title="Smart Attendance AI API")
 
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    # CRA thường tự tăng port nếu 3000 đang bận (3001, 3002...)
+    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1):3\\d{3}$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -35,6 +38,9 @@ app.add_middleware(
 print("=" * 60)
 print("🤖 LOADING AI MODELS...")
 print("=" * 60)
+
+# ==================== AUTH ====================
+app.include_router(_auth_router, prefix="/api/auth")
 
 # YOLO
 try:
@@ -81,6 +87,18 @@ class StudentInfo(BaseModel):
     anh_dai_dien: Optional[str] = None  # tên file trong thư mục avatars/ (vd: 2025001.jpg)
 
 
+class StudentSelfProfileUpdate(BaseModel):
+    ho_ten: Optional[str] = None
+    email: Optional[str] = None
+
+
+class StudentFeedbackCreate(BaseModel):
+    loai: str  # CHUONG_TRINH | GIANG_VIEN | GOP_Y
+    tieu_de: Optional[str] = None
+    noi_dung: str
+    ma_lhp: Optional[str] = None
+
+
 AVATARS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "avatars")
 os.makedirs(AVATARS_DIR, exist_ok=True)
 
@@ -119,6 +137,44 @@ def sinhvien_row_to_student(row) -> StudentInfo:
 
 
 ensure_anh_dai_dien_column()
+
+
+def ensure_phan_hoi_sinh_vien_table():
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+        IF OBJECT_ID('dbo.PhanHoiSinhVien', 'U') IS NULL
+        BEGIN
+            CREATE TABLE dbo.PhanHoiSinhVien (
+                Id INT IDENTITY(1,1) PRIMARY KEY,
+                MaSV NVARCHAR(30) NOT NULL,
+                LoaiPhanHoi NVARCHAR(50) NOT NULL,
+                TieuDe NVARCHAR(255) NULL,
+                NoiDung NVARCHAR(2000) NOT NULL,
+                MaLHP NVARCHAR(30) NULL,
+                CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+            );
+            CREATE INDEX IX_PhanHoi_MaSV ON dbo.PhanHoiSinhVien(MaSV);
+        END
+        """)
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print("✅ Bảng PhanHoiSinhVien đã sẵn sàng")
+    except Exception as e:
+        print(f"⚠️ Không thể tạo bảng PhanHoiSinhVien: {e}")
+
+
+ensure_phan_hoi_sinh_vien_table()
+
+
+def _student_ma_sv_from_auth(current: dict) -> str:
+    ma = (current.get("ma_sv") or "").strip()
+    if not ma:
+        raise HTTPException(status_code=400, detail="Tài khoản chưa gắn mã sinh viên (MaSV). Liên hệ quản trị.")
+    return ma
+
 
 # ==================== AI FUNCTIONS ====================
 
@@ -278,6 +334,315 @@ async def create_student(student: StudentInfo):
         cursor.close()
         conn.close()
 
+
+@app.post("/api/students/{ma_sv}/avatar")
+async def upload_student_avatar(ma_sv: str, file: UploadFile = File(...)):
+    """Upload / thay ảnh đại diện sinh viên (JPEG/PNG/WebP, tối đa 5MB)."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT MaSV FROM SinhVien WHERE MaSV = ?", (ma_sv,))
+    if not cursor.fetchone():
+        cursor.close()
+        conn.close()
+        raise HTTPException(status_code=404, detail="Sinh viên không tồn tại")
+    cursor.close()
+    conn.close()
+
+    contents = await file.read()
+    if len(contents) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Ảnh tối đa 5MB")
+    try:
+        img = Image.open(io.BytesIO(contents))
+        img = img.convert("RGB")
+        safe_ma = "".join(c for c in ma_sv if c.isalnum() or c in "-_") or "user"
+        out_name = f"{safe_ma}.jpg"
+        out_path = os.path.join(AVATARS_DIR, out_name)
+        img.save(out_path, "JPEG", quality=88)
+    except Exception:
+        raise HTTPException(status_code=400, detail="File không phải ảnh hợp lệ")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE SinhVien SET AnhDaiDien = ? WHERE MaSV = ?",
+        (out_name, ma_sv),
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return {"success": True, "message": "Đã cập nhật ảnh đại diện", "anh_dai_dien": out_name}
+
+
+@app.delete("/api/students/{ma_sv}/avatar")
+async def delete_student_avatar(ma_sv: str):
+    """Xóa ảnh đại diện → giao diện dùng lại avatar chữ."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT AnhDaiDien FROM SinhVien WHERE MaSV = ?", (ma_sv,))
+    row = cursor.fetchone()
+    if not row:
+        cursor.close()
+        conn.close()
+        raise HTTPException(status_code=404, detail="Sinh viên không tồn tại")
+    fn = row[0] if row[0] else None
+    cursor.execute(
+        "UPDATE SinhVien SET AnhDaiDien = NULL WHERE MaSV = ?", (ma_sv,)
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
+    if fn:
+        path = os.path.join(AVATARS_DIR, str(fn).strip())
+        if os.path.isfile(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+    return {"success": True, "message": "Đã xóa ảnh đại diện"}
+
+
+@app.get("/api/students/{ma_sv}/avatar")
+async def get_student_avatar_file(ma_sv: str):
+    """Trả file ảnh đại diện (dùng làm src trong frontend)."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT AnhDaiDien FROM SinhVien WHERE MaSV = ?", (ma_sv,))
+    row = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    if not row or not row[0]:
+        raise HTTPException(status_code=404, detail="Chưa có ảnh đại diện")
+    path = os.path.join(AVATARS_DIR, str(row[0]).strip())
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="File ảnh không tồn tại")
+    return FileResponse(path, media_type="image/jpeg")
+
+
+# ==================== CỔNG SINH VIÊN (JWT) ====================
+
+
+@app.get("/api/student/me/enrollments")
+async def student_my_enrollments(current=Depends(require_role("STUDENT"))):
+    """Môn / lớp học phần sinh viên đã đăng ký + thông tin giảng viên."""
+    ma_sv = _student_ma_sv_from_auth(current)
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT
+                dk.MaLHP,
+                mh.MaMon,
+                mh.TenMon,
+                lhp.GiangVien,
+                lhp.MaGV,
+                gv.HoTen,
+                gv.Email,
+                gv.DienThoai
+            FROM DangKyHoc dk
+            JOIN LopHocPhan lhp ON dk.MaLHP = lhp.MaLHP
+            JOIN MonHoc mh ON lhp.MaMon = mh.MaMon
+            LEFT JOIN dbo.GiangVien gv
+                ON lhp.MaGV IS NOT NULL
+                AND LTRIM(RTRIM(lhp.MaGV)) = LTRIM(RTRIM(gv.MaGV))
+            WHERE dk.MaSV = ?
+            ORDER BY dk.MaLHP
+            """,
+            (ma_sv,),
+        )
+        out = []
+        for row in cursor.fetchall():
+            ma_lhp, ma_mon, ten_mon, gv_text, ma_gv_lhp, gv_hoten, gv_email, gv_dt = row
+            ten_gv_hien_thi = (gv_hoten or "").strip() or (gv_text or "").strip() or "—"
+            out.append(
+                {
+                    "ma_lhp": ma_lhp,
+                    "ma_mon": ma_mon,
+                    "ten_mon": ten_mon,
+                    "giang_vien": ten_gv_hien_thi,
+                    "ma_gv": (ma_gv_lhp or "").strip() or None,
+                    "gv_email": (gv_email or "").strip() or None,
+                    "gv_dien_thoai": (gv_dt or "").strip() or None,
+                    "ghi_chu_gv": (gv_text or "").strip() or None,
+                }
+            )
+        return out
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.get("/api/student/me/sessions")
+async def student_my_sessions(limit: int = 300, current=Depends(require_role("STUDENT"))):
+    """Buổi học thuộc các lớp học phần sinh viên đã đăng ký."""
+    ma_sv = _student_ma_sv_from_auth(current)
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT TOP (?)
+                bh.MaBuoi,
+                bh.MaLHP,
+                bh.NgayHoc,
+                bh.GioBatDau,
+                mh.TenMon,
+                lhp.GiangVien,
+                lhp.MaGV,
+                gv.HoTen
+            FROM BuoiHoc bh
+            INNER JOIN DangKyHoc dk ON dk.MaLHP = bh.MaLHP AND dk.MaSV = ?
+            JOIN LopHocPhan lhp ON bh.MaLHP = lhp.MaLHP
+            JOIN MonHoc mh ON lhp.MaMon = mh.MaMon
+            LEFT JOIN dbo.GiangVien gv
+                ON lhp.MaGV IS NOT NULL
+                AND LTRIM(RTRIM(lhp.MaGV)) = LTRIM(RTRIM(gv.MaGV))
+            ORDER BY bh.NgayHoc DESC, bh.GioBatDau DESC
+            """,
+            (limit, ma_sv),
+        )
+        sessions = []
+        for row in cursor.fetchall():
+            ngay = row[2].isoformat() if row[2] else None
+            gio = row[3]
+            if gio and not isinstance(gio, str):
+                gio = gio.strftime("%H:%M:%S")
+            gv_show = (row[7] or "").strip() or (row[5] or "").strip() or "—"
+            sessions.append(
+                {
+                    "ma_buoi": row[0],
+                    "ma_lhp": row[1],
+                    "ngay_hoc": ngay,
+                    "gio_bat_dau": gio,
+                    "ten_mon": row[4],
+                    "giang_vien": gv_show,
+                }
+            )
+        return sessions
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.patch("/api/student/me/profile")
+async def student_update_own_profile(
+    body: StudentSelfProfileUpdate,
+    current=Depends(require_role("STUDENT")),
+):
+    """Sinh viên cập nhật họ tên / email trên bảng SinhVien (không đổi MaSV)."""
+    ma_sv = _student_ma_sv_from_auth(current)
+    if body.ho_ten is None and body.email is None:
+        raise HTTPException(status_code=400, detail="Không có trường nào để cập nhật")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT HoTen, Email FROM SinhVien WHERE MaSV = ?", (ma_sv,))
+    row = cursor.fetchone()
+    if not row:
+        cursor.close()
+        conn.close()
+        raise HTTPException(status_code=404, detail="Không tìm thấy sinh viên trong CSDL")
+
+    if body.ho_ten is not None:
+        ho_ten = body.ho_ten.strip()
+        if not ho_ten:
+            cursor.close()
+            conn.close()
+            raise HTTPException(status_code=400, detail="Họ tên không hợp lệ")
+    else:
+        ho_ten = row[0]
+    if body.email is not None:
+        email = body.email.strip()
+    else:
+        email = row[1]
+
+    cursor.execute(
+        "UPDATE SinhVien SET HoTen = ?, Email = ? WHERE MaSV = ?",
+        (ho_ten, email, ma_sv),
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return {"success": True, "message": "Đã cập nhật hồ sơ"}
+
+
+@app.post("/api/student/me/feedback")
+async def student_submit_feedback(
+    body: StudentFeedbackCreate,
+    current=Depends(require_role("STUDENT")),
+):
+    loai = (body.loai or "").strip().upper()
+    if loai not in {"CHUONG_TRINH", "GIANG_VIEN", "GOP_Y"}:
+        raise HTTPException(status_code=400, detail="Loại phản hồi không hợp lệ")
+    nd = (body.noi_dung or "").strip()
+    if len(nd) < 5:
+        raise HTTPException(status_code=400, detail="Nội dung phản hồi quá ngắn")
+    ma_sv = _student_ma_sv_from_auth(current)
+    ma_lhp = (body.ma_lhp or "").strip() or None
+    if ma_lhp:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) FROM DangKyHoc WHERE MaSV = ? AND MaLHP = ?",
+            (ma_sv, ma_lhp),
+        )
+        ok = cursor.fetchone()[0] > 0
+        cursor.close()
+        conn.close()
+        if not ok:
+            raise HTTPException(status_code=400, detail="Bạn chưa đăng ký lớp học phần này")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO dbo.PhanHoiSinhVien (MaSV, LoaiPhanHoi, TieuDe, NoiDung, MaLHP)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            ma_sv,
+            loai,
+            (body.tieu_de or "").strip() or None,
+            nd[:2000],
+            ma_lhp,
+        ),
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return {"success": True, "message": "Đã gửi phản hồi. Cảm ơn bạn!"}
+
+
+@app.get("/api/student/me/feedbacks")
+async def student_list_own_feedbacks(current=Depends(require_role("STUDENT"))):
+    ma_sv = _student_ma_sv_from_auth(current)
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT Id, LoaiPhanHoi, TieuDe, NoiDung, MaLHP, CreatedAt
+        FROM dbo.PhanHoiSinhVien
+        WHERE MaSV = ?
+        ORDER BY CreatedAt DESC
+        """,
+        (ma_sv,),
+    )
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return [
+        {
+            "id": r[0],
+            "loai": r[1],
+            "tieu_de": r[2],
+            "noi_dung": r[3],
+            "ma_lhp": r[4],
+            "created_at": r[5].isoformat() if r[5] else None,
+        }
+        for r in rows
+    ]
+
+
 # ==================== TRAINING APIs ====================
 
 @app.post("/api/training/upload-image/{ma_sv}")
@@ -407,18 +772,20 @@ async def recognize_face_endpoint(file: UploadFile = File(...)):
         conn.close()
         
         if row:
+            st = sinhvien_row_to_student(row)
             return {
                 "success": True,
                 "identity": identity,
                 "confidence": float(confidence),
                 "student_info": {
-                    "ma_sv": row[0],
-                    "ho_ten": row[1],
-                    "ngay_sinh": row[2].isoformat() if row[2] else None,
-                    "gioi_tinh": row[3],
-                    "lop": row[4],
-                    "khoa": row[5],
-                    "email": row[6]
+                    "ma_sv": st.ma_sv,
+                    "ho_ten": st.ho_ten,
+                    "ngay_sinh": st.ngay_sinh.isoformat() if st.ngay_sinh else None,
+                    "gioi_tinh": st.gioi_tinh,
+                    "lop": st.lop,
+                    "khoa": st.khoa,
+                    "email": st.email,
+                    "anh_dai_dien": st.anh_dai_dien,
                 },
                 "top_matches": [{"identity": m[0], "score": float(m[1])} for m in top_matches[:3]]
             }
@@ -980,11 +1347,37 @@ async def get_recent_activities(limit: int = 10):
         conn.close()
 
 if __name__ == "__main__":
+    import socket
+    import sys
     import uvicorn
+
+    port = int(os.environ.get("PORT", "8000"))
+    # Kiểm tra cổng trước khi load — tránh log lỗi 10048 khó hiểu
+    test = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        test.bind(("0.0.0.0", port))
+    except OSError as e:
+        test.close()
+        print("\n" + "=" * 60)
+        print("❌ KHÔNG THỂ MỞ CỔNG", port, f"({e.winerror if hasattr(e, 'winerror') else e})")
+        print("=" * 60)
+        print("Nguyên nhân: cổng đã có process khác đang dùng (thường là backend đã chạy sẵn).")
+        print("")
+        print("Cách xử lý:")
+        print("  1) Nếu API đã chạy — KHÔNG cần mở thêm: mở http://localhost:8000/docs kiểm tra.")
+        print("  2) Muốn chạy lại — tắt process cũ (PowerShell):")
+        print(f"     netstat -ano | findstr :{port}")
+        print("     taskkill /PID <số_PID_cột_cuối> /F")
+        print(f"  3) Hoặc chạy cổng khác (nhớ set frontend REACT_APP_API_URL cho đúng cổng):")
+        print(f"     set PORT=8001 && python main.py")
+        print("=" * 60 + "\n")
+        sys.exit(1)
+    test.close()
+
     print("\n" + "=" * 60)
     print("🚀 SMART ATTENDANCE AI - COMPLETE SYSTEM")
     print("=" * 60)
-    print("📍 Server: http://localhost:8000")
-    print("📚 Docs: http://localhost:8000/docs")
+    print(f"📍 Server: http://localhost:{port}")
+    print(f"📚 Docs: http://localhost:{port}/docs")
     print("=" * 60)
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=port)

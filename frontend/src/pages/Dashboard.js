@@ -27,7 +27,9 @@ import {
   Pie,
   Cell,
 } from 'recharts';
+import { Navigate } from 'react-router-dom';
 import { analyticsAPI } from '../services/api';
+import { useAuth } from '../auth/AuthContext';
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042'];
 
@@ -63,13 +65,10 @@ function StatCard({ title, value, icon, color }) {
 }
 
 function Dashboard() {
+  const { user } = useAuth();
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-
-  useEffect(() => {
-    fetchDashboardData();
-  }, []);
 
   const fetchDashboardData = async () => {
     try {
@@ -84,6 +83,15 @@ function Dashboard() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (user?.role === 'STUDENT') return;
+    fetchDashboardData();
+  }, [user?.role]);
+
+  if (user?.role === 'STUDENT') {
+    return <Navigate to="/student" replace />;
+  }
 
   if (loading) {
     return (

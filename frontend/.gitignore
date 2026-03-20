@@ -35,9 +35,6 @@ venv/
 __pycache__/
 *.pyc
 
-# Datasets
-backend/dataset_cropped/
-backend/dataset_raw/
 
 # Models / Generated data
 backend/models/
@@ -47,9 +44,6 @@ backend/models/
 backend/dataset_raw/
 backend/dataset_cropped/
 
-# Model
-*.pt
-*.pkl
 
 # Local folder
 diemdanh/

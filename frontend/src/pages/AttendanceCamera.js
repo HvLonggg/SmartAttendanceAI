@@ -28,6 +28,7 @@ import {
   Person as PersonIcon,
 } from '@mui/icons-material';
 import { recognitionAPI, attendanceAPI, CameraWebSocket } from '../services/api';
+import { getStudentAvatarSrc } from '../utils/studentAvatar';
 
 const videoConstraints = {
   width: 640,
@@ -44,6 +45,7 @@ function AttendanceCamera() {
   const [recentAttendance, setRecentAttendance] = useState([]);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [avatarKey, setAvatarKey] = useState(0);
   const wsRef = useRef(null);
 
   useEffect(() => {
@@ -94,6 +96,7 @@ function AttendanceCamera() {
             thoi_gian: new Date().toLocaleTimeString('vi-VN'),
             timestamp: Date.now(),
           }, ...prev.slice(0, 9)]);
+          setAvatarKey((k) => k + 1);
         } else {
           setError(checkinResponse.data.message);
         }
@@ -315,10 +318,13 @@ function AttendanceCamera() {
                     <React.Fragment key={item.timestamp}>
                       <ListItem>
                         <ListItemAvatar>
-                          <Avatar sx={{ 
-                            bgcolor: item.trang_thai === 'Đúng giờ' ? 'success.main' : 'warning.main' 
-                          }}>
-                            <PersonIcon />
+                          <Avatar
+                            src={item.anh_dai_dien ? getStudentAvatarSrc(item, avatarKey) : undefined}
+                            sx={{
+                              bgcolor: item.trang_thai === 'Đúng giờ' ? 'success.main' : 'warning.main',
+                            }}
+                          >
+                            {!item.anh_dai_dien ? (item.ho_ten?.charAt(0) || <PersonIcon />) : null}
                           </Avatar>
                         </ListItemAvatar>
                         <ListItemText

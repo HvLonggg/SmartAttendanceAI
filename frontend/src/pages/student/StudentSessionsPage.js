@@ -1,0 +1,132 @@
+import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import {
+  Box,
+  Typography,
+  Card,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Paper,
+  CircularProgress,
+  Alert,
+  TextField,
+  Button,
+  Chip,
+} from '@mui/material';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import { studentPortalAPI } from '../../services/api';
+
+export default function StudentSessionsPage() {
+  const navigate = useNavigate();
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [filterDate, setFilterDate] = useState('');
+
+  const load = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const { data } = await studentPortalAPI.getMySessions();
+      setRows(data || []);
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Không tải được lịch buổi học');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const filtered = filterDate
+    ? rows.filter((r) => (r.ngay_hoc || '').slice(0, 10) === filterDate)
+    : rows;
+
+  return (
+    <Box>
+      <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/student')} sx={{ mb: 2 }}>
+        Về trang sinh viên
+      </Button>
+      <Typography variant="h4" fontWeight={900} gutterBottom sx={{ background: 'linear-gradient(90deg,#4f46e5,#db2777)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+        Buổi học của tôi
+      </Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        Chỉ hiển thị buổi học thuộc các lớp học phần bạn đã đăng ký.
+      </Typography>
+
+      <Card sx={{ p: 2, mb: 2, borderRadius: 3, boxShadow: '0 8px 32px rgba(99,102,241,0.12)' }}>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
+          <TextField
+            label="Lọc theo ngày"
+            type="date"
+            size="small"
+            InputLabelProps={{ shrink: true }}
+            value={filterDate}
+            onChange={(e) => setFilterDate(e.target.value)}
+            sx={{ minWidth: 200 }}
+          />
+          <Button variant="outlined" onClick={() => setFilterDate('')}>
+            Xem tất cả
+          </Button>
+          <Button variant="contained" onClick={load}>
+            Làm mới
+          </Button>
+        </Box>
+      </Card>
+
+      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+
+      {loading ? (
+        <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
+          <CircularProgress />
+        </Box>
+      ) : (
+        <TableContainer component={Paper} sx={{ borderRadius: 3, overflow: 'hidden', boxShadow: '0 4px 24px rgba(0,0,0,0.08)' }}>
+          <Table size="small">
+            <TableHead>
+              <TableRow sx={{ bgcolor: 'primary.main', '& th': { color: '#fff', fontWeight: 800 } }}>
+                <TableCell>Ngày</TableCell>
+                <TableCell>Giờ</TableCell>
+                <TableCell>Môn học</TableCell>
+                <TableCell>Mã LHP</TableCell>
+                <TableCell>Giảng viên</TableCell>
+                <TableCell>Mã buổi</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {filtered.map((r) => (
+                <TableRow key={r.ma_buoi} hover sx={{ '&:nth-of-type(odd)': { bgcolor: 'action.hover' } }}>
+                  <TableCell>{r.ngay_hoc}</TableCell>
+                  <TableCell>{r.gio_bat_dau}</TableCell>
+                  <TableCell>
+                    <Typography fontWeight={700}>{r.ten_mon}</Typography>
+                  </TableCell>
+                  <TableCell>
+                    <Chip label={r.ma_lhp} size="small" color="primary" variant="outlined" />
+                  </TableCell>
+                  <TableCell>{r.giang_vien}</TableCell>
+                  <TableCell>{r.ma_buoi}</TableCell>
+                </TableRow>
+              ))}
+              {!filtered.length && (
+                <TableRow>
+                  <TableCell colSpan={6} align="center">
+                    <Typography color="text.secondary" sx={{ py: 3 }}>
+                      Không có buổi học phù hợp.
+                    </Typography>
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
+    </Box>
+  );
+}

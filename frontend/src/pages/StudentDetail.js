@@ -20,6 +20,7 @@ import {
   Divider,
   Paper,
   LinearProgress,
+  TextField,
 } from '@mui/material';
 import {
   ArrowBack as ArrowBackIcon,
@@ -29,6 +30,8 @@ import {
   CheckCircle as CheckIcon,
   Cancel as CancelIcon,
   Schedule as ScheduleIcon,
+  PhotoCamera as PhotoCameraIcon,
+  DeleteOutline as DeleteOutlineIcon,
 } from '@mui/icons-material';
 import {
   LineChart,
@@ -43,21 +46,40 @@ import {
   Pie,
   Cell,
 } from 'recharts';
-import { studentAPI, analyticsAPI } from '../services/api';
+import { studentAPI, analyticsAPI, studentPortalAPI } from '../services/api';
+import { getStudentAvatarSrc } from '../utils/studentAvatar';
+import { useAuth } from '../auth/AuthContext';
 
 const COLORS = ['#2e7d32', '#ed6c02', '#d32f2f'];
 
 function StudentDetail() {
   const { maSV } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [student, setStudent] = useState(null);
   const [analytics, setAnalytics] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [avatarUploading, setAvatarUploading] = useState(false);
+  const [avatarError, setAvatarError] = useState(null);
+  const [avatarSuccess, setAvatarSuccess] = useState(null);
+  const [avatarKey, setAvatarKey] = useState(0); // cache busting
+  const [profileHoTen, setProfileHoTen] = useState('');
+  const [profileEmail, setProfileEmail] = useState('');
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileMsg, setProfileMsg] = useState(null);
+  const [profileErr, setProfileErr] = useState(null);
 
   useEffect(() => {
     fetchStudentData();
   }, [maSV]);
+
+  useEffect(() => {
+    if (student) {
+      setProfileHoTen(student.ho_ten || '');
+      setProfileEmail(student.email || '');
+    }
+  }, [student]);
 
   const fetchStudentData = async () => {
     try {
@@ -105,6 +127,89 @@ function StudentDetail() {
     );
   }
 
+  if (user?.role === 'STUDENT' && String(maSV) !== String(user?.ma_sv)) {
+    return (
+      <Box sx={{ p: 2 }}>
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          Student chỉ có thể xem thông tin của tài khoản mình.
+        </Alert>
+        <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/student')} variant="outlined">
+          Về trang sinh viên
+        </Button>
+      </Box>
+    );
+  }
+
+  const getAvatarSrc = () => {
+    if (!student?.anh_dai_dien) return null;
+    return getStudentAvatarSrc(student, avatarKey);
+  };
+
+  const canEditAvatar =
+    user?.role === 'ADMIN' ||
+    user?.role === 'TEACHER' ||
+    (user?.role === 'STUDENT' && user?.ma_sv === student?.ma_sv);
+
+  const canEditStudentProfile =
+    user?.role === 'STUDENT' && String(user?.ma_sv) === String(student?.ma_sv);
+
+  const handleSaveStudentProfile = async () => {
+    setProfileErr(null);
+    setProfileMsg(null);
+    setProfileSaving(true);
+    try {
+      await studentPortalAPI.updateMyProfile({
+        ho_ten: profileHoTen,
+        email: profileEmail,
+      });
+      setProfileMsg('Đã cập nhật hồ sơ');
+      await fetchStudentData();
+    } catch (err) {
+      setProfileErr(err.response?.data?.detail || 'Không lưu được');
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
+  const handleAvatarFileChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setAvatarError(null);
+    setAvatarSuccess(null);
+    setAvatarUploading(true);
+    try {
+      await studentAPI.uploadAvatar(student.ma_sv, file);
+      setAvatarSuccess('Đã cập nhật ảnh đại diện');
+      await fetchStudentData();
+      setAvatarKey((k) => k + 1);
+    } catch (err) {
+      console.error('Upload avatar error:', err);
+      setAvatarError(err.response?.data?.detail || 'Không thể upload ảnh đại diện');
+    } finally {
+      setAvatarUploading(false);
+      // reset để chọn lại cùng file vẫn trigger onChange
+      e.target.value = '';
+    }
+  };
+
+  const handleDeleteAvatar = async () => {
+    setAvatarError(null);
+    setAvatarSuccess(null);
+    setAvatarUploading(true);
+    try {
+      await studentAPI.deleteAvatar(student.ma_sv);
+      setAvatarSuccess('Đã xóa ảnh đại diện');
+      await fetchStudentData();
+      setAvatarKey((k) => k + 1);
+    } catch (err) {
+      console.error('Delete avatar error:', err);
+      setAvatarError(err.response?.data?.detail || 'Không thể xóa ảnh đại diện');
+    } finally {
+      setAvatarUploading(false);
+    }
+  };
+
   // Tính toán thống kê
   const totalClasses = analytics.reduce((sum, item) => sum + item.tong_buoi, 0);
   const totalAttended = analytics.reduce((sum, item) => sum + item.so_buoi_co_mat, 0);
@@ -128,8 +233,18 @@ function StudentDetail() {
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Button
           startIcon={<ArrowBackIcon />}
-          onClick={() => navigate('/students')}
+          onClick={() => navigate(user?.role === 'STUDENT' ? '/student' : '/students')}
           variant="outlined"
+          sx={{
+            borderWidth: 2,
+            borderColor: 'primary.light',
+            fontWeight: 700,
+            '&:hover': {
+              borderWidth: 2,
+              borderColor: 'primary.main',
+              bgcolor: 'rgba(99,102,241,0.06)',
+            },
+          }}
         >
           Quay lại
         </Button>
@@ -138,29 +253,148 @@ function StudentDetail() {
       {/* Thông tin cơ bản */}
       <Grid container spacing={3}>
         <Grid item xs={12} md={4}>
-          <Card>
-            <CardContent sx={{ textAlign: 'center' }}>
-              <Avatar
-                sx={{
-                  width: 120,
-                  height: 120,
-                  margin: '0 auto 16px',
-                  bgcolor: 'primary.main',
-                  fontSize: 48,
-                }}
-              >
-                {student.ho_ten.charAt(0)}
-              </Avatar>
-              <Typography variant="h5" gutterBottom fontWeight="bold">
-                {student.ho_ten}
-              </Typography>
-              <Chip
-                label={student.trang_thai || 'Đang học'}
-                color={student.trang_thai === 'Đang học' ? 'success' : 'default'}
-                sx={{ mb: 2 }}
-              />
+          <Card
+            elevation={0}
+            sx={{
+              overflow: 'hidden',
+              borderRadius: 3,
+              border: '1px solid',
+              borderColor: 'divider',
+              boxShadow: '0 8px 32px rgba(99,102,241,0.12), 0 2px 8px rgba(0,0,0,0.06)',
+            }}
+          >
+            <Box
+              sx={{
+                position: 'relative',
+                px: 2.5,
+                pt: 3,
+                pb: 2.5,
+                textAlign: 'center',
+                background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 42%, #ec4899 100%)',
+                '&::after': {
+                  content: '""',
+                  position: 'absolute',
+                  inset: 0,
+                  background:
+                    'radial-gradient(ellipse 80% 60% at 50% 120%, rgba(255,255,255,0.22), transparent 55%)',
+                  pointerEvents: 'none',
+                },
+              }}
+            >
+              <Box sx={{ position: 'relative', zIndex: 1 }}>
+                <Avatar
+                  src={getAvatarSrc() || undefined}
+                  sx={{
+                    width: 112,
+                    height: 112,
+                    margin: '0 auto 14px',
+                    bgcolor: 'rgba(255,255,255,0.25)',
+                    fontSize: 44,
+                    fontWeight: 800,
+                    color: '#fff',
+                    border: '4px solid rgba(255,255,255,0.95)',
+                    boxShadow: '0 12px 40px rgba(0,0,0,0.2)',
+                  }}
+                >
+                  {(!student.anh_dai_dien && student.ho_ten?.charAt(0)) || ''}
+                </Avatar>
 
-              <Divider sx={{ my: 2 }} />
+                <Typography
+                  variant="h5"
+                  fontWeight={800}
+                  sx={{ color: '#fff', textShadow: '0 1px 8px rgba(0,0,0,0.15)', mb: 1 }}
+                >
+                  {student.ho_ten}
+                </Typography>
+                <Chip
+                  label={student.trang_thai || 'Đang học'}
+                  size="small"
+                  sx={{
+                    mb: 2,
+                    bgcolor: 'rgba(255,255,255,0.22)',
+                    color: '#fff',
+                    fontWeight: 600,
+                    border: '1px solid rgba(255,255,255,0.35)',
+                    '& .MuiChip-label': { px: 1.5 },
+                  }}
+                />
+
+                {canEditAvatar && (
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      justifyContent: 'center',
+                      gap: 1,
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <Button
+                      component="label"
+                      variant="contained"
+                      disabled={avatarUploading}
+                      startIcon={<PhotoCameraIcon />}
+                      sx={{
+                        bgcolor: 'rgba(255,255,255,0.98)',
+                        color: '#6366f1',
+                        fontWeight: 700,
+                        boxShadow: '0 4px 14px rgba(0,0,0,0.15)',
+                        transition: 'all 0.25s ease',
+                        '&:hover': {
+                          bgcolor: '#fff',
+                          transform: 'translateY(-2px)',
+                          boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+                        },
+                      }}
+                    >
+                      {student.anh_dai_dien ? 'Đổi ảnh' : 'Tải ảnh lên'}
+                      <input
+                        hidden
+                        accept="image/*"
+                        type="file"
+                        onChange={handleAvatarFileChange}
+                      />
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      disabled={avatarUploading || !student.anh_dai_dien}
+                      onClick={handleDeleteAvatar}
+                      startIcon={<DeleteOutlineIcon />}
+                      sx={{
+                        borderColor: 'rgba(255,255,255,0.7)',
+                        color: '#fff',
+                        fontWeight: 600,
+                        transition: 'all 0.25s ease',
+                        '&:hover': {
+                          borderColor: '#fff',
+                          bgcolor: 'rgba(255,255,255,0.15)',
+                          transform: 'translateY(-2px)',
+                        },
+                        '&.Mui-disabled': {
+                          borderColor: 'rgba(255,255,255,0.25)',
+                          color: 'rgba(255,255,255,0.45)',
+                        },
+                      }}
+                    >
+                      Xóa ảnh
+                    </Button>
+                  </Box>
+                )}
+              </Box>
+            </Box>
+
+            {avatarError && (
+              <Alert severity="error" sx={{ mx: 2, mt: 1.5 }}>
+                {avatarError}
+              </Alert>
+            )}
+            {avatarSuccess && (
+              <Alert severity="success" sx={{ mx: 2, mt: 1.5 }}>
+                {avatarSuccess}
+              </Alert>
+            )}
+
+            <CardContent sx={{ pt: 2.5, pb: 2, textAlign: 'left' }}>
+              <Divider sx={{ mb: 2 }} />
 
               <Box sx={{ textAlign: 'left' }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
@@ -225,6 +459,45 @@ function StudentDetail() {
                       </Typography>
                     </Box>
                   </Box>
+                )}
+
+                {canEditStudentProfile && (
+                  <>
+                    <Divider sx={{ my: 2 }} />
+                    <Typography variant="subtitle2" fontWeight={800} gutterBottom sx={{ color: 'primary.main' }}>
+                      Cập nhật thông tin liên hệ
+                    </Typography>
+                    {profileErr && (
+                      <Alert severity="error" sx={{ mb: 1 }}>
+                        {profileErr}
+                      </Alert>
+                    )}
+                    {profileMsg && (
+                      <Alert severity="success" sx={{ mb: 1 }}>
+                        {profileMsg}
+                      </Alert>
+                    )}
+                    <TextField
+                      label="Họ và tên"
+                      fullWidth
+                      value={profileHoTen}
+                      onChange={(e) => setProfileHoTen(e.target.value)}
+                      sx={{ mb: 1.5 }}
+                      size="small"
+                    />
+                    <TextField
+                      label="Email"
+                      fullWidth
+                      type="email"
+                      value={profileEmail}
+                      onChange={(e) => setProfileEmail(e.target.value)}
+                      sx={{ mb: 1.5 }}
+                      size="small"
+                    />
+                    <Button variant="contained" onClick={handleSaveStudentProfile} disabled={profileSaving} fullWidth>
+                      {profileSaving ? 'Đang lưu...' : 'Lưu thay đổi'}
+                    </Button>
+                  </>
                 )}
               </Box>
             </CardContent>

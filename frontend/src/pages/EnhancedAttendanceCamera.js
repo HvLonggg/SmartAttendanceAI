@@ -35,8 +35,10 @@ import {
   Verified as VerifiedIcon,
 } from '@mui/icons-material';
 import axios from 'axios';
+import { getStudentAvatarSrc } from '../utils/studentAvatar';
+import { getApiPathPrefix } from '../config/apiBase';
 
-const API_URL = 'http://localhost:8000';
+const API = getApiPathPrefix();
 
 function EnhancedAttendanceCamera() {
   const webcamRef = useRef(null);
@@ -50,6 +52,7 @@ function EnhancedAttendanceCamera() {
   const [loading, setLoading] = useState(false);
   const [autoCapture, setAutoCapture] = useState(true);
   const [captureInterval, setCaptureInterval] = useState(3000);
+  const [avatarKey, setAvatarKey] = useState(0);
   const [sessionStats, setSessionStats] = useState({
     total: 0,
     onTime: 0,
@@ -80,7 +83,7 @@ function EnhancedAttendanceCamera() {
 
   const fetchTodaySessions = async () => {
     try {
-      const response = await axios.get(`${API_URL}/api/sessions/today`);
+      const response = await axios.get(`${API}/sessions/today`);
       setSessions(response.data);
       if (response.data.length > 0) {
         setSelectedSession(response.data[0].ma_buoi);
@@ -92,7 +95,7 @@ function EnhancedAttendanceCamera() {
 
   const fetchSessionAttendance = async () => {
     try {
-      const response = await axios.get(`${API_URL}/api/attendance/session/${selectedSession}`);
+      const response = await axios.get(`${API}/attendance/session/${selectedSession}`);
       setRecentAttendance(response.data);
       
       // Calculate stats
@@ -125,7 +128,7 @@ function EnhancedAttendanceCamera() {
       const formData = new FormData();
       formData.append('file', file);
 
-      const response = await axios.post(`${API_URL}/api/recognize`, formData);
+      const response = await axios.post(`${API}/recognize`, formData);
       const result = response.data;
 
       setRecognitionResult(result);
@@ -134,7 +137,7 @@ function EnhancedAttendanceCamera() {
       if (result.success && selectedSession) {
         try {
           const checkinResponse = await axios.post(
-            `${API_URL}/api/attendance/checkin`,
+            `${API}/attendance/checkin`,
             null,
             {
               params: {
@@ -147,6 +150,7 @@ function EnhancedAttendanceCamera() {
           if (checkinResponse.data.success) {
             setSuccess(`✅ ${result.student_info.ho_ten} - ${checkinResponse.data.trang_thai}`);
             fetchSessionAttendance();
+            setAvatarKey((k) => k + 1);
             
             // Clear success after 3s
             setTimeout(() => setSuccess(null), 3000);
@@ -372,8 +376,17 @@ function EnhancedAttendanceCamera() {
                     <Paper sx={{ p: 2, bgcolor: 'success.light' }}>
                       <Grid container spacing={2} alignItems="center">
                         <Grid item>
-                          <Avatar sx={{ width: 60, height: 60, bgcolor: 'success.main' }}>
-                            <VerifiedIcon sx={{ fontSize: 40 }} />
+                          <Avatar
+                            src={
+                              recognitionResult.student_info?.anh_dai_dien
+                                ? getStudentAvatarSrc(recognitionResult.student_info, avatarKey)
+                                : undefined
+                            }
+                            sx={{ width: 60, height: 60, bgcolor: 'success.main' }}
+                          >
+                            {recognitionResult.student_info?.anh_dai_dien
+                              ? null
+                              : (recognitionResult.student_info?.ho_ten?.charAt(0) || <VerifiedIcon sx={{ fontSize: 40 }} />)}
                           </Avatar>
                         </Grid>
                         
@@ -534,17 +547,16 @@ function EnhancedAttendanceCamera() {
                       <ListItem alignItems="flex-start">
                         <ListItemAvatar>
                           <Avatar
+                            src={item.anh_dai_dien ? getStudentAvatarSrc(item, avatarKey) : undefined}
                             sx={{
                               bgcolor: item.trang_thai === 'Đúng giờ' 
                                 ? 'success.main' 
                                 : 'warning.main',
                             }}
                           >
-                            {item.trang_thai === 'Đúng giờ' ? (
-                              <CheckIcon />
-                            ) : (
-                              <ScheduleIcon />
-                            )}
+                            {!item.anh_dai_dien
+                              ? (item.ho_ten?.charAt(0) || (item.trang_thai === 'Đúng giờ' ? <CheckIcon /> : <ScheduleIcon />))
+                              : null}
                           </Avatar>
                         </ListItemAvatar>
                         

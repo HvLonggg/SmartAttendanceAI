@@ -43,8 +43,10 @@ import {
   PhotoCamera as PhotoIcon,
 } from '@mui/icons-material';
 import axios from 'axios';
+import { getApiPathPrefix } from '../config/apiBase';
+import { useAuth } from '../auth/AuthContext';
 
-const API_URL = 'http://localhost:8000';
+const API = getApiPathPrefix();
 
 const TRAINING_STEPS = [
   'Chuẩn bị ảnh',
@@ -66,6 +68,7 @@ const CAPTURE_TIPS = [
 function StudentTraining() {
   const { maSV } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const webcamRef = useRef(null);
   const fileInputRef = useRef(null);
   
@@ -105,7 +108,7 @@ function StudentTraining() {
 
   const fetchStudent = async () => {
     try {
-      const response = await axios.get(`${API_URL}/api/students/${maSV}`);
+      const response = await axios.get(`${API}/students/${maSV}`);
       setStudent(response.data);
     } catch (err) {
       setError('Không thể tải thông tin sinh viên');
@@ -115,7 +118,7 @@ function StudentTraining() {
 
   const fetchTrainingImages = async () => {
     try {
-      const response = await axios.get(`${API_URL}/api/training/images/${maSV}`);
+      const response = await axios.get(`${API}/training/images/${maSV}`);
       setImages(response.data.images || []);
       
       // Cập nhật bước dựa trên số ảnh
@@ -129,7 +132,7 @@ function StudentTraining() {
 
   const fetchTrainingStatus = async () => {
     try {
-      const response = await axios.get(`${API_URL}/api/training/status/${maSV}`);
+      const response = await axios.get(`${API}/training/status/${maSV}`);
       setTrainingStatus(response.data);
       
       // Cập nhật bước nếu đã huấn luyện
@@ -158,7 +161,7 @@ function StudentTraining() {
       const formData = new FormData();
       formData.append('file', file);
 
-      await axios.post(`${API_URL}/api/training/upload-image/${maSV}`, formData);
+      await axios.post(`${API}/training/upload-image/${maSV}`, formData);
       
       setCaptureCount(prev => prev + 1);
       setSuccess(`Đã chụp ảnh thứ ${captureCount + 1}!`);
@@ -192,7 +195,7 @@ function StudentTraining() {
         try {
           const formData = new FormData();
           formData.append('file', file);
-          await axios.post(`${API_URL}/api/training/upload-image/${maSV}`, formData);
+          await axios.post(`${API}/training/upload-image/${maSV}`, formData);
           uploadedCount++;
         } catch (err) {
           errorCount++;
@@ -220,7 +223,7 @@ function StudentTraining() {
     if (!window.confirm('Bạn có chắc muốn xóa ảnh này?')) return;
 
     try {
-      await axios.delete(`${API_URL}/api/training/image/${maSV}/${filename}`);
+      await axios.delete(`${API}/training/image/${maSV}/${filename}`);
       setSuccess('Đã xóa ảnh');
       await fetchTrainingImages();
       await fetchTrainingStatus();
@@ -235,7 +238,7 @@ function StudentTraining() {
 
     setLoading(true);
     try {
-      await axios.delete(`${API_URL}/api/training/remove/${maSV}`);
+      await axios.delete(`${API}/training/remove/${maSV}`);
       setSuccess('Đã xóa toàn bộ dữ liệu huấn luyện');
       await fetchTrainingImages();
       await fetchTrainingStatus();
@@ -271,7 +274,7 @@ function StudentTraining() {
     }, 500);
 
     try {
-      const response = await axios.post(`${API_URL}/api/training/train/${maSV}`);
+      const response = await axios.post(`${API}/training/train/${maSV}`);
       
       clearInterval(progressInterval);
       setTrainingProgress(100);
@@ -314,6 +317,19 @@ function StudentTraining() {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4 }}>
         <CircularProgress />
+      </Box>
+    );
+  }
+
+  if (user?.role === 'STUDENT' && String(maSV) !== String(user?.ma_sv)) {
+    return (
+      <Box sx={{ p: 2 }}>
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          Student chỉ có thể huấn luyện nhận diện cho tài khoản của mình.
+        </Alert>
+        <Button onClick={() => navigate('/dashboard')} variant="outlined">
+          Về trang chính
+        </Button>
       </Box>
     );
   }
@@ -636,7 +652,7 @@ function StudentTraining() {
               {images.map((img, index) => (
                 <ImageListItem key={index}>
                   <img
-                    src={`${API_URL}/api/training/image/${maSV}/${img.filename}`}
+                    src={`${API}/training/image/${maSV}/${img.filename}`}
                     alt={img.filename}
                     loading="lazy"
                     style={{ 
@@ -689,7 +705,7 @@ function StudentTraining() {
             </DialogTitle>
             <DialogContent>
               <img
-                src={`${API_URL}/api/training/image/${maSV}/${selectedImage.filename}`}
+                src={`${API}/training/image/${maSV}/${selectedImage.filename}`}
                 alt={selectedImage.filename}
                 style={{ width: '100%', height: 'auto', borderRadius: 8 }}
               />

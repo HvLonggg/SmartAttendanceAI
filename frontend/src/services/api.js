@@ -1,8 +1,7 @@
 import axios from 'axios';
+import { getApiPathPrefix, getWsOrigin, getBackendHttpOrigin } from '../config/apiBase';
 
-const API_BASE_URL = process.env.REACT_APP_API_URL 
-  ? `${process.env.REACT_APP_API_URL}/api` 
-  : 'http://localhost:8000/api';
+const API_BASE_URL = getApiPathPrefix();
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
@@ -11,6 +10,22 @@ const apiClient = axios.create({
   },
   timeout: 30000, // 30 seconds
 });
+
+// Gắn JWT vào header (nếu có)
+apiClient.interceptors.request.use(
+  (config) => {
+    try {
+      const token = localStorage.getItem('auth_token');
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+    } catch (e) {
+      // ignore
+    }
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
 
 // Interceptor để log errors
 apiClient.interceptors.response.use(
@@ -26,6 +41,22 @@ apiClient.interceptors.response.use(
   }
 );
 
+// ==================== AUTH ====================
+export const authAPI = {
+  register: (payload) => apiClient.post('/auth/register', payload),
+  verifyOtp: (payload) => apiClient.post('/auth/verify-otp', payload),
+  resendOtp: (payload) => apiClient.post('/auth/resend-otp', payload),
+  login: (payload) => apiClient.post('/auth/login', payload),
+  forgotPassword: (payload) => apiClient.post('/auth/forgot-password', payload),
+  resetPassword: (payload) => apiClient.post('/auth/reset-password', payload),
+  resetPasswordEmail: (payload) => apiClient.post('/auth/reset-password-email', payload),
+  me: () => apiClient.get('/auth/me'),
+
+  adminListUsers: () => apiClient.get('/auth/admin/users'),
+  setUserLock: (username, locked, reason) =>
+    apiClient.post(`/auth/admin/users/${username}/set-lock`, { locked, reason: reason || null }),
+};
+
 // ==================== STUDENTS ====================
 
 export const studentAPI = {
@@ -38,6 +69,28 @@ export const studentAPI = {
   update: (maSV, studentData) => apiClient.put(`/students/${maSV}`, studentData),
   
   delete: (maSV) => apiClient.delete(`/students/${maSV}`),
+
+  uploadAvatar: (maSV, imageFile) => {
+    const formData = new FormData();
+    formData.append('file', imageFile);
+
+    return apiClient.post(`/students/${maSV}/avatar`, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+  },
+
+  deleteAvatar: (maSV) => apiClient.delete(`/students/${maSV}/avatar`),
+};
+
+// ==================== CỔNG SINH VIÊN ====================
+export const studentPortalAPI = {
+  getMyEnrollments: () => apiClient.get('/student/me/enrollments'),
+  getMySessions: () => apiClient.get('/student/me/sessions'),
+  updateMyProfile: (payload) => apiClient.patch('/student/me/profile', payload),
+  submitFeedback: (payload) => apiClient.post('/student/me/feedback', payload),
+  listMyFeedbacks: () => apiClient.get('/student/me/feedbacks'),
 };
 
 // ==================== FACE RECOGNITION ====================
@@ -214,8 +267,8 @@ export class CameraWebSocket {
   }
   
   connect() {
-    const wsUrl = API_BASE_URL.replace('http', 'ws').replace('/api', '');
-    this.ws = new WebSocket(`${wsUrl}/ws/camera`);
+    const wsOrigin = getWsOrigin();
+    this.ws = new WebSocket(`${wsOrigin}/ws/camera`);
     
     this.ws.onopen = () => {
       console.log('WebSocket connected');
@@ -278,10 +331,11 @@ export class CameraWebSocket {
 
 // ==================== HEALTH CHECK ====================
 
+const backendOrigin = () => getBackendHttpOrigin();
+
 export const healthAPI = {
-  ping: () => apiClient.get('/'),
-  
-  status: () => apiClient.get('/health'),
+  ping: () => axios.get(`${backendOrigin()}/`),
+  status: () => axios.get(`${backendOrigin()}/health`),
 };
 
 // ==================== UTILITY FUNCTIONS ====================

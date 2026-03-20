@@ -16,6 +16,7 @@ import {
   TextField,
   InputAdornment,
   IconButton,
+  Avatar,
   Chip,
   Dialog,
   DialogTitle,
@@ -28,11 +29,10 @@ import {
   Search as SearchIcon,
   Add as AddIcon,
   Visibility as ViewIcon,
-  Edit as EditIcon,
-  Delete as DeleteIcon,
   Camera as CameraIcon,
 } from '@mui/icons-material';
 import { studentAPI } from '../services/api';
+import { getStudentAvatarSrc } from '../utils/studentAvatar';
 
 function StudentList() {
   const navigate = useNavigate();
@@ -195,7 +195,44 @@ function StudentList() {
                     <TableRow key={student.ma_sv} hover>
                       <TableCell>{student.ma_sv}</TableCell>
                       <TableCell>
-                        <Typography fontWeight={500}>{student.ho_ten}</Typography>
+                        <Box
+                          sx={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 1.25,
+                            cursor: 'pointer',
+                            py: 0.25,
+                            '&:hover .stu-name': { color: 'primary.main' },
+                          }}
+                          onClick={() => handleViewStudent(student.ma_sv)}
+                        >
+                          <Avatar
+                            src={
+                              student.anh_dai_dien
+                                ? getStudentAvatarSrc(student, 0)
+                                : undefined
+                            }
+                            sx={{
+                              width: 38,
+                              height: 38,
+                              fontSize: 15,
+                              fontWeight: 700,
+                              bgcolor: 'primary.main',
+                              boxShadow: '0 2px 8px rgba(37,99,235,0.35)',
+                            }}
+                          >
+                            {(!student.anh_dai_dien && student.ho_ten?.charAt(0)) || ''}
+                          </Avatar>
+                          <Typography
+                            className="stu-name"
+                            fontWeight={600}
+                            noWrap
+                            title={student.ho_ten}
+                            sx={{ transition: 'color 0.2s ease' }}
+                          >
+                            {student.ho_ten}
+                          </Typography>
+                        </Box>
                       </TableCell>
                       <TableCell>
                         {student.ngay_sinh
