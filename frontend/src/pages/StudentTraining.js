@@ -45,6 +45,7 @@ import {
 import axios from 'axios';
 import { getApiPathPrefix } from '../config/apiBase';
 import { useAuth } from '../auth/AuthContext';
+import { formatApiError } from '../utils/apiError';
 
 const API = getApiPathPrefix();
 
@@ -64,6 +65,8 @@ const CAPTURE_TIPS = [
   'Không đeo khẩu trang, kính râm',
   'Chụp ít nhất 15 ảnh cho độ chính xác cao'
 ];
+
+const MAX_AUTO_IMAGES = 20; // Giới hạn mỗi lượt chụp tự động
 
 function StudentTraining() {
   const { maSV } = useParams();
@@ -86,6 +89,7 @@ function StudentTraining() {
   const [selectedImage, setSelectedImage] = useState(null);
   const [activeStep, setActiveStep] = useState(0);
   const [trainingProgress, setTrainingProgress] = useState(0);
+  const [captureOkFlash, setCaptureOkFlash] = useState(false);
 
   useEffect(() => {
     fetchStudent();
@@ -93,18 +97,24 @@ function StudentTraining() {
     fetchTrainingStatus();
   }, [maSV]);
 
-  // Auto capture interval
+  // Auto capture: chụp tuần tự và giới hạn mỗi lượt tối đa 20 ảnh
   useEffect(() => {
-    let intervalId;
-    if (autoCapture && showCamera) {
-      intervalId = setInterval(() => {
-        handleCapture();
-      }, 2000); // Chụp mỗi 2 giây
+    if (!autoCapture || !showCamera) return;
+    if (capturing) return;
+
+    if (captureCount >= MAX_AUTO_IMAGES) {
+      setAutoCapture(false);
+      setSuccess(`✅ Đã chụp đủ ${MAX_AUTO_IMAGES} ảnh. Bạn có thể huấn luyện.`);
+      setTimeout(() => setSuccess(null), 2500);
+      return;
     }
-    return () => {
-      if (intervalId) clearInterval(intervalId);
-    };
-  }, [autoCapture, showCamera]);
+
+    const t = setTimeout(() => {
+      handleCapture();
+    }, 2000); // chụp mỗi 2 giây
+
+    return () => clearTimeout(t);
+  }, [autoCapture, showCamera, capturing, captureCount]);
 
   const fetchStudent = async () => {
     try {
@@ -146,7 +156,8 @@ function StudentTraining() {
 
   const handleCapture = useCallback(async () => {
     if (!webcamRef.current) return;
-    
+    if (capturing) return;
+
     const imageSrc = webcamRef.current.getScreenshot();
     if (!imageSrc) {
       setError('Không thể chụp ảnh. Vui lòng kiểm tra camera.');
@@ -155,30 +166,44 @@ function StudentTraining() {
 
     setCapturing(true);
     try {
-      const blob = await fetch(imageSrc).then(r => r.blob());
+      const blob = await fetch(imageSrc).then((r) => r.blob());
       const file = new File([blob], `capture_${Date.now()}.jpg`, { type: 'image/jpeg' });
 
       const formData = new FormData();
       formData.append('file', file);
 
       await axios.post(`${API}/training/upload-image/${maSV}`, formData);
-      
-      setCaptureCount(prev => prev + 1);
-      setSuccess(`Đã chụp ảnh thứ ${captureCount + 1}!`);
-      
-      // Tự động tắt success message sau 1s
-      setTimeout(() => setSuccess(null), 1000);
-      
+
+      setCaptureCount((prev) => {
+        const next = prev + 1;
+        const isDone = autoCapture && next >= MAX_AUTO_IMAGES;
+
+        // Flash ✓ ngay trên màn hình camera sau mỗi ảnh upload thành công
+        setCaptureOkFlash(true);
+        setTimeout(() => setCaptureOkFlash(false), 900);
+
+        if (isDone) {
+          setSuccess(`✅ Đã chụp đủ ${MAX_AUTO_IMAGES} ảnh. Dừng tự động.`);
+          setTimeout(() => setSuccess(null), 3000);
+          setAutoCapture(false);
+        } else if (!autoCapture) {
+          // Chế độ chụp tay: báo Alert (có thể làm layout nhảy). Chế độ tự động: chỉ dùng overlay ✓ để khung camera không bị đẩy.
+          setSuccess(`✅ Đã chụp ảnh ${next}!`);
+          setTimeout(() => setSuccess(null), 1200);
+        }
+
+        return next;
+      });
+
       await fetchTrainingImages();
       await fetchTrainingStatus();
-      
     } catch (err) {
-      setError('Lỗi khi lưu ảnh: ' + (err.response?.data?.detail || err.message));
+      setError('Lỗi khi lưu ảnh: ' + formatApiError(err.response?.data?.detail, err.message));
       console.error('Capture error:', err);
     } finally {
       setCapturing(false);
     }
-  }, [maSV, captureCount]);
+  }, [API, autoCapture, capturing, maSV, fetchTrainingImages, fetchTrainingStatus]);
 
   const handleFileUpload = async (event) => {
     const files = event.target.files;
@@ -292,7 +317,7 @@ function StudentTraining() {
       }
     } catch (err) {
       clearInterval(progressInterval);
-      setError(err.response?.data?.detail || 'Lỗi khi huấn luyện model');
+      setError(formatApiError(err.response?.data?.detail, 'Lỗi khi huấn luyện model'));
       setActiveStep(1);
       console.error('Training error:', err);
     } finally {
@@ -305,7 +330,7 @@ function StudentTraining() {
     setShowCamera(true);
     setAutoCapture(true);
     setCaptureCount(0);
-    setSuccess('Bắt đầu chụp tự động. Hãy thay đổi góc nhìn và biểu cảm!');
+    // Không dùng Alert toàn trang — tránh đẩy khung camera / các khối phía dưới
   };
 
   const stopAutoCapture = () => {
@@ -327,8 +352,8 @@ function StudentTraining() {
         <Alert severity="warning" sx={{ mb: 2 }}>
           Student chỉ có thể huấn luyện nhận diện cho tài khoản của mình.
         </Alert>
-        <Button onClick={() => navigate('/dashboard')} variant="outlined">
-          Về trang chính
+        <Button onClick={() => navigate('/student/profile')} variant="outlined">
+          Về hồ sơ của tôi
         </Button>
       </Box>
     );
@@ -342,7 +367,10 @@ function StudentTraining() {
     <Box>
       {/* Header */}
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
-        <IconButton onClick={() => navigate('/students')} color="primary">
+        <IconButton
+          onClick={() => (user?.role === 'STUDENT' ? navigate('/student/profile') : navigate('/students'))}
+          color="primary"
+        >
           <BackIcon />
         </IconButton>
         <Box sx={{ ml: 2, flexGrow: 1 }}>
@@ -515,55 +543,107 @@ function StudentTraining() {
         </Grid>
       </Grid>
 
-      {/* Camera */}
+      {/* Camera — thu gọn chiều ngang; overlay ✓ không làm dịch chuyển layout (không spam Alert khi tự động) */}
       {showCamera && (
         <Card sx={{ mb: 3 }}>
           <CardContent>
-            <Box sx={{ position: 'relative', backgroundColor: '#000', borderRadius: 2 }}>
-              <Webcam
-                ref={webcamRef}
-                audio={false}
-                screenshotFormat="image/jpeg"
-                videoConstraints={{ 
-                  width: 1280, 
-                  height: 720, 
-                  facingMode: 'user' 
+            <Box
+              sx={{
+                maxWidth: { xs: '100%', sm: 440, md: 480 },
+                mx: 'auto',
+                width: '100%',
+              }}
+            >
+              <Box
+                sx={{
+                  position: 'relative',
+                  backgroundColor: '#000',
+                  borderRadius: 2,
+                  overflow: 'hidden',
+                  width: '100%',
+                  aspectRatio: '16 / 9',
+                  maxHeight: { xs: 280, sm: 300, md: 320 },
                 }}
-                style={{ width: '100%', borderRadius: 8 }}
-              />
-              
-              {autoCapture && (
-                <Chip
-                  label={`Tự động chụp (${captureCount} ảnh)`}
-                  color="error"
-                  sx={{
-                    position: 'absolute',
-                    top: 16,
-                    right: 16,
-                    animation: 'blink 1.5s linear infinite',
-                    '@keyframes blink': {
-                      '0%, 49%': { opacity: 1 },
-                      '50%, 100%': { opacity: 0.5 },
-                    },
+              >
+                <Webcam
+                  ref={webcamRef}
+                  audio={false}
+                  screenshotFormat="image/jpeg"
+                  videoConstraints={{
+                    width: 1280,
+                    height: 720,
+                    facingMode: 'user',
                   }}
+                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                 />
-              )}
-            </Box>
-            
-            {!autoCapture && (
-              <Box sx={{ mt: 2, textAlign: 'center' }}>
-                <Button
-                  variant="contained"
-                  color="primary"
-                  size="large"
-                  startIcon={<CameraIcon />}
-                  onClick={handleCapture}
-                  disabled={capturing}
-                >
-                  {capturing ? 'Đang lưu...' : 'Chụp ảnh'}
-                </Button>
+
+                {autoCapture && (
+                  <Chip
+                    label={`Tự động chụp (${Math.min(captureCount, MAX_AUTO_IMAGES)}/${MAX_AUTO_IMAGES})`}
+                    color="error"
+                    sx={{
+                      position: 'absolute',
+                      top: 16,
+                      right: 16,
+                      animation: 'blink 1.5s linear infinite',
+                      '@keyframes blink': {
+                        '0%, 49%': { opacity: 1 },
+                        '50%, 100%': { opacity: 0.5 },
+                      },
+                    }}
+                  />
+                )}
+
+                {captureOkFlash && (
+                  <Box
+                    sx={{
+                      position: 'absolute',
+                      inset: 0,
+                      background: 'rgba(16,185,129,0.22)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      pointerEvents: 'none',
+                    }}
+                  >
+                    <Chip
+                      icon={<CheckIcon />}
+                      label="✓ Đã chụp xong"
+                      color="success"
+                      sx={{ fontWeight: 900 }}
+                    />
+                  </Box>
+                )}
               </Box>
-            )}
+
+              {/* Giữ cố định chiều cao vùng nút — tránh nhảy layout khi đổi chế độ */}
+              <Box
+                sx={{
+                  minHeight: 56,
+                  mt: 2,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                {autoCapture ? (
+                  <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center' }}>
+                    Đang chụp tự động — nhìn thẳng camera, thay đổi góc nhẹ giữa các ảnh.
+                  </Typography>
+                ) : (
+                  <Button
+                    variant="contained"
+                    color="primary"
+                    size="large"
+                    startIcon={<CameraIcon />}
+                    onClick={handleCapture}
+                    disabled={capturing}
+                  >
+                    {capturing ? 'Đang lưu...' : 'Chụp ảnh'}
+                  </Button>
+                )}
+              </Box>
+            </Box>
             
             {/* Tips */}
             <Paper sx={{ mt: 2, p: 2, bgcolor: 'info.light' }}>

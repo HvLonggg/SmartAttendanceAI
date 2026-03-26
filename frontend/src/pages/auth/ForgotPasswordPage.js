@@ -3,6 +3,7 @@ import { Box, Button, Card, CardContent, TextField, Typography, Alert, Stack } f
 import { useNavigate } from 'react-router-dom';
 import AuthLayout from '../../layouts/AuthLayout';
 import { authAPI } from '../../services/api';
+import { formatApiError } from '../../utils/apiError';
 
 export default function ForgotPasswordPage() {
   const navigate = useNavigate();
@@ -25,7 +26,7 @@ export default function ForgotPasswordPage() {
       if (data.dev_otp) setDevOtp(data.dev_otp);
       navigate(`/auth/reset-password-email?email=${encodeURIComponent(email)}`, { state: data.dev_otp ? { dev_otp: data.dev_otp } : undefined });
     } catch (err) {
-      setError(err.response?.data?.detail || 'Không thể gửi OTP');
+      setError(formatApiError(err.response?.data?.detail, 'Không thể gửi OTP'));
     } finally {
       setBusy(false);
     }

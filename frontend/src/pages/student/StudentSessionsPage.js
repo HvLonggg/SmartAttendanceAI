@@ -19,9 +19,12 @@ import {
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { studentPortalAPI } from '../../services/api';
+import { formatApiError } from '../../utils/apiError';
+import { useI18n } from '../../i18n/I18nContext';
 
-export default function StudentSessionsPage() {
+export default function StudentSessionsPage({ compact = false, maxItems = null }) {
   const navigate = useNavigate();
+  const { t } = useI18n();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -34,7 +37,7 @@ export default function StudentSessionsPage() {
       const { data } = await studentPortalAPI.getMySessions();
       setRows(data || []);
     } catch (e) {
-      setError(e.response?.data?.detail || 'Không tải được lịch buổi học');
+      setError(formatApiError(e.response?.data?.detail, t('studentSessionsPage.loadFail')));
     } finally {
       setLoading(false);
     }
@@ -47,23 +50,33 @@ export default function StudentSessionsPage() {
   const filtered = filterDate
     ? rows.filter((r) => (r.ngay_hoc || '').slice(0, 10) === filterDate)
     : rows;
+  const displayRows = maxItems ? filtered.slice(0, maxItems) : filtered;
 
   return (
     <Box>
-      <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/student')} sx={{ mb: 2 }}>
-        Về trang sinh viên
-      </Button>
-      <Typography variant="h4" fontWeight={900} gutterBottom sx={{ background: 'linear-gradient(90deg,#4f46e5,#db2777)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-        Buổi học của tôi
-      </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Chỉ hiển thị buổi học thuộc các lớp học phần bạn đã đăng ký.
-      </Typography>
+      {!compact && (
+        <>
+          <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/student')} sx={{ mb: 2 }}>
+            {t('studentSessionsPage.back')}
+          </Button>
+          <Typography
+            variant="h4"
+            fontWeight={900}
+            gutterBottom
+            sx={{ background: 'linear-gradient(90deg,#4f46e5,#db2777)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}
+          >
+            {t('studentSessionsPage.title')}
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            {t('studentSessionsPage.subtitle')}
+          </Typography>
+        </>
+      )}
 
       <Card sx={{ p: 2, mb: 2, borderRadius: 3, boxShadow: '0 8px 32px rgba(99,102,241,0.12)' }}>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
           <TextField
-            label="Lọc theo ngày"
+            label={t('studentSessionsPage.filterLabel')}
             type="date"
             size="small"
             InputLabelProps={{ shrink: true }}
@@ -71,12 +84,8 @@ export default function StudentSessionsPage() {
             onChange={(e) => setFilterDate(e.target.value)}
             sx={{ minWidth: 200 }}
           />
-          <Button variant="outlined" onClick={() => setFilterDate('')}>
-            Xem tất cả
-          </Button>
-          <Button variant="contained" onClick={load}>
-            Làm mới
-          </Button>
+          <Button variant="outlined" onClick={() => setFilterDate('')}>{t('studentSessionsPage.viewAll')}</Button>
+          <Button variant="contained" onClick={load}>{t('studentSessionsPage.refresh')}</Button>
         </Box>
       </Card>
 
@@ -91,16 +100,16 @@ export default function StudentSessionsPage() {
           <Table size="small">
             <TableHead>
               <TableRow sx={{ bgcolor: 'primary.main', '& th': { color: '#fff', fontWeight: 800 } }}>
-                <TableCell>Ngày</TableCell>
-                <TableCell>Giờ</TableCell>
-                <TableCell>Môn học</TableCell>
-                <TableCell>Mã LHP</TableCell>
-                <TableCell>Giảng viên</TableCell>
-                <TableCell>Mã buổi</TableCell>
+                <TableCell>{t('studentSessionsPage.table.date')}</TableCell>
+                <TableCell>{t('studentSessionsPage.table.time')}</TableCell>
+                <TableCell>{t('studentSessionsPage.table.courseName')}</TableCell>
+                <TableCell>{t('studentSessionsPage.table.lhpCode')}</TableCell>
+                <TableCell>{t('studentSessionsPage.table.teacher')}</TableCell>
+                <TableCell>{t('studentSessionsPage.table.sessionCode')}</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {filtered.map((r) => (
+              {displayRows.map((r) => (
                 <TableRow key={r.ma_buoi} hover sx={{ '&:nth-of-type(odd)': { bgcolor: 'action.hover' } }}>
                   <TableCell>{r.ngay_hoc}</TableCell>
                   <TableCell>{r.gio_bat_dau}</TableCell>
@@ -114,11 +123,11 @@ export default function StudentSessionsPage() {
                   <TableCell>{r.ma_buoi}</TableCell>
                 </TableRow>
               ))}
-              {!filtered.length && (
+              {!displayRows.length && (
                 <TableRow>
                   <TableCell colSpan={6} align="center">
                     <Typography color="text.secondary" sx={{ py: 3 }}>
-                      Không có buổi học phù hợp.
+                      {t('studentSessionsPage.empty')}
                     </Typography>
                   </TableCell>
                 </TableRow>

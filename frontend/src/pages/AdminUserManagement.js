@@ -1,10 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { Box, Card, CardContent, Typography, Table, TableHead, TableRow, TableCell, TableBody, Chip, Button, Alert } from '@mui/material';
 import { authAPI } from '../services/api';
+import { formatApiError } from '../utils/apiError';
 import { useAuth } from '../auth/AuthContext';
+import { useI18n } from '../i18n/I18nContext';
 
 export default function AdminUserManagement() {
   const { user } = useAuth();
+  const { t } = useI18n();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -17,7 +20,7 @@ export default function AdminUserManagement() {
       const res = await authAPI.adminListUsers();
       setRows(res.data.users || []);
     } catch (e) {
-      setError(e.response?.data?.detail || 'Không thể tải danh sách người dùng');
+      setError(formatApiError(e.response?.data?.detail, t('adminUserManagement.loadFail')));
     } finally {
       setLoading(false);
     }
@@ -36,7 +39,7 @@ export default function AdminUserManagement() {
       await authAPI.setUserLock(u.username, !u.is_locked, 'Được cập nhật bởi admin');
       await fetchUsers();
     } catch (e) {
-      setError(e.response?.data?.detail || 'Không thể cập nhật khóa tài khoản');
+      setError(formatApiError(e.response?.data?.detail, t('adminUserManagement.updateLockFail')));
     } finally {
       setBusyUser(null);
     }
@@ -44,9 +47,7 @@ export default function AdminUserManagement() {
 
   return (
     <Box>
-      <Typography variant="h4" fontWeight="bold" gutterBottom>
-        Quản lý tài khoản (Admin)
-      </Typography>
+      <Typography variant="h4" fontWeight="bold" gutterBottom>{t('adminUserManagement.title')}</Typography>
 
       {error && (
         <Alert severity="error" sx={{ mb: 2 }}>
@@ -57,21 +58,21 @@ export default function AdminUserManagement() {
       <Card>
         <CardContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Đang đăng nhập: <b>{user?.username}</b>
+            {t('adminUserManagement.loggedIn', { username: user?.username })}
           </Typography>
 
           {loading ? (
-            <Typography>Đang tải...</Typography>
+            <Typography>{t('adminUserManagement.loading')}</Typography>
           ) : (
             <Table size="small">
               <TableHead>
                 <TableRow>
-                  <TableCell>Username</TableCell>
-                  <TableCell>Role</TableCell>
-                  <TableCell>Email</TableCell>
-                  <TableCell>Verified</TableCell>
-                  <TableCell>Locked</TableCell>
-                  <TableCell>Thao tác</TableCell>
+                  <TableCell>{t('adminUserManagement.table.username')}</TableCell>
+                  <TableCell>{t('adminUserManagement.table.role')}</TableCell>
+                  <TableCell>{t('adminUserManagement.table.email')}</TableCell>
+                  <TableCell>{t('adminUserManagement.table.verified')}</TableCell>
+                  <TableCell>{t('adminUserManagement.table.locked')}</TableCell>
+                  <TableCell>{t('adminUserManagement.table.actions')}</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -82,14 +83,14 @@ export default function AdminUserManagement() {
                     <TableCell>{r.email}</TableCell>
                     <TableCell>
                       <Chip
-                        label={r.is_verified ? 'Đã xác thực' : 'Chưa xác thực'}
+                        label={r.is_verified ? t('adminUserManagement.verifiedYes') : t('adminUserManagement.verifiedNo')}
                         size="small"
                         color={r.is_verified ? 'success' : 'default'}
                       />
                     </TableCell>
                     <TableCell>
                       <Chip
-                        label={r.is_locked ? 'Đang khóa' : 'Đang hoạt động'}
+                        label={r.is_locked ? t('adminUserManagement.lockedYes') : t('adminUserManagement.lockedNo')}
                         size="small"
                         color={r.is_locked ? 'error' : 'success'}
                       />
@@ -102,7 +103,11 @@ export default function AdminUserManagement() {
                         disabled={busyUser === r.username}
                         onClick={() => toggleLock(r)}
                       >
-                        {busyUser === r.username ? 'Đang xử lý...' : r.is_locked ? 'Mở khóa' : 'Khóa'}
+                        {busyUser === r.username
+                          ? t('adminUserManagement.actionProcessing')
+                          : r.is_locked
+                            ? t('adminUserManagement.unlock')
+                            : t('adminUserManagement.lock')}
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -110,7 +115,7 @@ export default function AdminUserManagement() {
                 {rows.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={6} align="center">
-                      Không có dữ liệu
+                      {t('adminUserManagement.empty')}
                     </TableCell>
                   </TableRow>
                 )}

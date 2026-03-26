@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { getApiPathPrefix, getWsOrigin, getBackendHttpOrigin } from '../config/apiBase';
+import { formatApiError } from '../utils/apiError';
 
 const API_BASE_URL = getApiPathPrefix();
 
@@ -27,15 +28,21 @@ apiClient.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// Interceptor để log errors
+// Interceptor: log + gắn message chuỗi để màn hình không render object {loc,msg,type}
 apiClient.interceptors.response.use(
   response => response,
-  error => {
+  (error) => {
+    const status = error.response?.status;
+    const data = error.response?.data;
+    const detail = data?.detail;
+    const text = formatApiError(detail, error.message || 'Lỗi gọi API');
+    error.apiMessage = text;
     console.error('API Error:', {
       url: error.config?.url,
       method: error.config?.method,
-      status: error.response?.status,
-      data: error.response?.data
+      status,
+      detail: data,
+      messageText: text,
     });
     return Promise.reject(error);
   }
@@ -47,14 +54,33 @@ export const authAPI = {
   verifyOtp: (payload) => apiClient.post('/auth/verify-otp', payload),
   resendOtp: (payload) => apiClient.post('/auth/resend-otp', payload),
   login: (payload) => apiClient.post('/auth/login', payload),
+  changePassword: (payload) => apiClient.post('/auth/change-password', payload),
   forgotPassword: (payload) => apiClient.post('/auth/forgot-password', payload),
   resetPassword: (payload) => apiClient.post('/auth/reset-password', payload),
   resetPasswordEmail: (payload) => apiClient.post('/auth/reset-password-email', payload),
   me: () => apiClient.get('/auth/me'),
+  listKhoa: () => apiClient.get('/auth/khoa'),
+  listKhoaStructure: () => apiClient.get('/auth/khoa-structure'),
+  uploadTeacherAvatar: (file) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return apiClient.post('/auth/teacher/avatar', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
+  deleteTeacherAvatar: async () => {
+    try {
+      return await apiClient.delete('/auth/teacher/avatar');
+    } catch {
+      return apiClient.post('/auth/teacher/avatar/clear');
+    }
+  },
+  updateTeacherProfile: (payload) => apiClient.patch('/auth/teacher/profile', payload),
 
   adminListUsers: () => apiClient.get('/auth/admin/users'),
   setUserLock: (username, locked, reason) =>
     apiClient.post(`/auth/admin/users/${username}/set-lock`, { locked, reason: reason || null }),
+  provisionStudentAccounts: () => apiClient.post('/auth/admin/provision-student-accounts'),
 };
 
 // ==================== STUDENTS ====================
@@ -167,9 +193,14 @@ export const attendanceAPI = {
     params: { date }
   }),
   
-  checkin: (maSV, maBuoi) => apiClient.post('/attendance/checkin', null, {
-    params: { ma_sv: maSV, ma_buoi: maBuoi },
-  }),
+  checkin: (maSV, maBuoi, maXacThuc) =>
+    apiClient.post('/attendance/checkin', null, {
+      params: {
+        ma_sv: maSV,
+        ma_buoi: maBuoi,
+        ...(maXacThuc ? { ma_xac_thuc: maXacThuc } : {}),
+      },
+    }),
   
   getSessionAttendance: (maBuoi) => 
     apiClient.get(`/attendance/session/${maBuoi}`),
@@ -178,6 +209,39 @@ export const attendanceAPI = {
     apiClient.get(`/attendance/student/${maSV}`, {
       params: { start_date: startDate, end_date: endDate },
     }),
+};
+
+// ==================== TEACHER ====================
+
+export const teacherAPI = {
+  getMyClasses: () => apiClient.get('/teacher/my-classes'),
+  getSessions: () => apiClient.get('/teacher/sessions'),
+  createSession: (payload) => apiClient.post('/teacher/sessions', payload),
+  updateSession: (maBuoi, payload) => apiClient.patch(`/teacher/sessions/${maBuoi}`, payload),
+  deleteSession: (maBuoi) => apiClient.delete(`/teacher/sessions/${maBuoi}`),
+  getMyStudents: () => apiClient.get('/teacher/my-students'),
+  getAnalyticsSummary: () => apiClient.get('/teacher/analytics/summary'),
+  getAnalyticsOverview: () => apiClient.get('/teacher/analytics/overview'),
+  getAttendanceTrend: (days = 7) =>
+    apiClient.get('/teacher/analytics/attendance-trend', { params: { days } }),
+  getStatusDistribution: () => apiClient.get('/teacher/analytics/status-distribution'),
+  getTopStudents: (limit = 5) =>
+    apiClient.get('/teacher/analytics/top-students', { params: { limit } }),
+  getAtRiskStudents: () => apiClient.get('/teacher/analytics/at-risk-students'),
+  getClassComparison: () => apiClient.get('/teacher/analytics/class-comparison'),
+  getCareerHistory: () => apiClient.get('/teacher/career-history'),
+};
+
+export const adminTeachingAPI = {
+  listTeachers: () => apiClient.get('/admin/teaching/teachers'),
+  listClasses: () => apiClient.get('/admin/teaching/classes'),
+  listCourses: () => apiClient.get('/admin/teaching/courses'),
+  createClass: (payload) => apiClient.post('/admin/teaching/classes', payload),
+  assignTeacherForClass: (maLHP, maGV) =>
+    apiClient.patch(`/admin/teaching/classes/${encodeURIComponent(maLHP)}/teacher`, { ma_gv: maGV || null }),
+  getOverview: (params = {}) => apiClient.get('/admin/teaching/overview', { params }),
+  getDashboardOverview: () => apiClient.get('/admin/dashboard-overview'),
+  getClassDetail: (maLHP) => apiClient.get(`/admin/teaching/class-detail/${encodeURIComponent(maLHP)}`),
 };
 
 // ==================== ANALYTICS ====================
@@ -377,6 +441,7 @@ export default {
   recognitionAPI,
   trainingAPI,
   attendanceAPI,
+  teacherAPI,
   analyticsAPI,
   sessionAPI,
   healthAPI,

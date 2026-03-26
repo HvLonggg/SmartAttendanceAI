@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Box,
   Card,
@@ -12,13 +12,9 @@ import {
   TableHead,
   TableRow,
   Chip,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
   Alert,
-  Paper,
   LinearProgress,
+  CircularProgress,
 } from '@mui/material';
 import {
   TrendingUp as TrendingUpIcon,
@@ -42,85 +38,151 @@ import {
   PolarRadiusAxis,
   Radar,
 } from 'recharts';
-import { analyticsAPI } from '../services/api';
+import { analyticsAPI, teacherAPI } from '../services/api';
+import { useAuth } from '../auth/AuthContext';
+import { useI18n } from '../i18n/I18nContext';
 
-function AttendanceProgress({ value, label }) {
-  const getColor = (val) => {
-    if (val >= 80) return 'success';
-    if (val >= 60) return 'warning';
-    return 'error';
+function normalizeTrendRow(d) {
+  const co = d.coMat ?? 0;
+  const tr = d.tre ?? 0;
+  return {
+    name: d.name || '',
+    tyLe: co + tr > 0 ? (100 * co) / (co + tr) : 0,
   };
+}
 
-  return (
-    <Box sx={{ mb: 2 }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-        <Typography variant="body2" color="text.secondary">
-          {label}
-        </Typography>
-        <Typography variant="body2" fontWeight="bold">
-          {value.toFixed(1)}%
-        </Typography>
-      </Box>
-      <LinearProgress
-        variant="determinate"
-        value={value}
-        color={getColor(value)}
-        sx={{ height: 8, borderRadius: 4 }}
-      />
-    </Box>
-  );
+function normalizeStatusForRadar(rows) {
+  const raw = rows || [];
+  const sum = raw.reduce((s, x) => s + (x.value || 0), 0);
+  return raw.map((x) => ({
+    subject: x.name || '—',
+    value: sum ? Math.round((1000 * (x.value || 0)) / sum) / 10 : 0,
+  }));
 }
 
 function AnalyticsReport() {
-  const [selectedClass, setSelectedClass] = useState('');
-  const [classStats, setClassStats] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const { user } = useAuth();
+  const isTeacher = user?.role === 'TEACHER';
+  const { t, locale } = useI18n();
 
-  // Sample data - thay bằng API call thực tế
-  const trendData = [
-    { week: 'Tuần 1', tyLe: 95 },
-    { week: 'Tuần 2', tyLe: 92 },
-    { week: 'Tuần 3', tyLe: 88 },
-    { week: 'Tuần 4', tyLe: 90 },
-    { week: 'Tuần 5', tyLe: 87 },
-    { week: 'Tuần 6', tyLe: 85 },
-  ];
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [overview, setOverview] = useState(null);
+  const [trendData, setTrendData] = useState([]);
+  const [behaviorData, setBehaviorData] = useState([]);
+  const [comparisonData, setComparisonData] = useState([]);
+  const [topStudents, setTopStudents] = useState([]);
+  const [atRiskStudents, setAtRiskStudents] = useState([]);
 
-  const behaviorData = [
-    { subject: 'Đúng giờ', value: 85 },
-    { subject: 'Tương tác', value: 70 },
-    { subject: 'Hoàn thành BT', value: 80 },
-    { subject: 'Tham gia', value: 90 },
-    { subject: 'Chuyên cần', value: 75 },
-  ];
+  useEffect(() => {
+    let cancelled = false;
 
-  const comparisonData = [
-    { lop: 'DCCNTT13.10.1', tyLe: 88 },
-    { lop: 'DCCNTT13.10.2', tyLe: 85 },
-    { lop: 'DCCNTT13.10.3', tyLe: 92 },
-    { lop: 'DCCNTT13.10.4', tyLe: 79 },
-    { lop: 'DCCNTT13.10.5', tyLe: 86 },
-  ];
+    async function load() {
+      if (!user?.role || user.role === 'STUDENT') return;
+      try {
+        setLoading(true);
+        setError(null);
 
-  const topStudents = [
-    { ma_sv: '20220001', ho_ten: 'Nguyễn Văn A', ty_le: 100, so_buoi: '15/15' },
-    { ma_sv: '20220002', ho_ten: 'Trần Thị B', ty_le: 100, so_buoi: '15/15' },
-    { ma_sv: '20220003', ho_ten: 'Lê Văn C', ty_le: 93.3, so_buoi: '14/15' },
-    { ma_sv: '20220004', ho_ten: 'Phạm Thị D', ty_le: 93.3, so_buoi: '14/15' },
-    { ma_sv: '20220005', ho_ten: 'Hoàng Văn E', ty_le: 86.7, so_buoi: '13/15' },
-  ];
+        if (isTeacher) {
+          const [ov, tr, st, top, risk, comp] = await Promise.all([
+            teacherAPI.getAnalyticsOverview(),
+            teacherAPI.getAttendanceTrend(7),
+            teacherAPI.getStatusDistribution(),
+            teacherAPI.getTopStudents(5),
+            teacherAPI.getAtRiskStudents(),
+            teacherAPI.getClassComparison(),
+          ]);
+          if (cancelled) return;
+          setOverview(ov.data);
+          setTrendData((tr.data || []).map(normalizeTrendRow));
+          setBehaviorData(normalizeStatusForRadar(st.data));
+          setComparisonData(comp.data || []);
+          setTopStudents(top.data || []);
+          setAtRiskStudents(risk.data || []);
+        } else {
+          const [dash, tr, st, top, risk, comp] = await Promise.all([
+            analyticsAPI.getDashboardStats(),
+            analyticsAPI.getAttendanceTrend(7),
+            analyticsAPI.getStatusDistribution(),
+            analyticsAPI.getTopStudents(5),
+            analyticsAPI.getAtRiskStudents(),
+            analyticsAPI.getClassComparison(),
+          ]);
+          if (cancelled) return;
+          const classes = comp.data || [];
+          const avg = classes.length
+            ? classes.reduce((s, x) => s + (x.tyLe || 0), 0) / classes.length
+            : 0;
+          const atRisk = risk.data || [];
+          const total = dash.data?.total_students ?? 0;
+          const eligibleApprox = Math.max(0, total - atRisk.length);
+          setOverview({
+            avg_attendance_rate: Math.round(avg * 100) / 100,
+            eligible_ratio_text: total ? `${eligibleApprox}/${total}` : '0/0',
+            eligible_ok_percent: total ? Math.round((10000 * eligibleApprox) / total) / 100 : 0,
+            at_risk_count: atRisk.length,
+            late_rate_week: dash.data?.late_rate ?? 0,
+            _admin_note: true,
+          });
+          setTrendData((tr.data || []).map(normalizeTrendRow));
+          setBehaviorData(normalizeStatusForRadar(st.data));
+          setComparisonData(classes);
+          setTopStudents(top.data || []);
+          setAtRiskStudents(atRisk);
+        }
+      } catch (e) {
+        console.error(e);
+        if (!cancelled) setError(t('analyticsReport.loadError'));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
 
-  const atRiskStudents = [
-    { ma_sv: '20220035', ho_ten: 'Hoàng Văn Long', ty_le: 73.3, so_buoi: '11/15', ket_luan: 'Cảnh báo' },
-    { ma_sv: '20220036', ho_ten: 'Nguyễn Thị F', ty_le: 66.7, so_buoi: '10/15', ket_luan: 'Nguy cơ cao' },
-    { ma_sv: '20220037', ho_ten: 'Trần Văn G', ty_le: 60.0, so_buoi: '9/15', ket_luan: 'Nguy cơ cao' },
-  ];
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.role, isTeacher]);
+
+  const trendHint = useMemo(() => {
+    if (trendData.length < 2) return null;
+    const a = trendData[trendData.length - 2].tyLe;
+    const b = trendData[trendData.length - 1].tyLe;
+    const d = b - a;
+    return { delta: d, up: d >= 0 };
+  }, [trendData]);
+
+  if (!user?.role || user.role === 'STUDENT') {
+    return <Alert severity="info">{t('analyticsReport.noPermission')}</Alert>;
+  }
+
+  if (loading) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 320 }}>
+        <CircularProgress />
+      </Box>
+    );
+  }
+
+  if (error) {
+    return <Alert severity="error">{error}</Alert>;
+  }
 
   return (
     <Box>
-      <Typography variant="h4" gutterBottom fontWeight="bold">
-        Báo cáo & Phân tích Chuyên cần
-      </Typography>
+      <Typography variant="h4" gutterBottom fontWeight="bold">{t('analyticsReport.title')}</Typography>
+
+      {isTeacher && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          {t('analyticsReport.teacherNote')}
+        </Alert>
+      )}
+
+      {!isTeacher && overview?._admin_note && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          {t('analyticsReport.adminEstimateNote')}
+        </Alert>
+      )}
 
       {/* Overview Cards */}
       <Grid container spacing={3} sx={{ mb: 3 }}>
@@ -128,17 +190,28 @@ function AnalyticsReport() {
           <Card>
             <CardContent>
               <Typography color="textSecondary" variant="body2">
-                Tỷ lệ chuyên cần TB
+                {t('analyticsReport.avgAttendance')}
               </Typography>
               <Typography variant="h3" color="primary">
-                85.6%
+                {(overview?.avg_attendance_rate ?? 0).toFixed(1)}%
               </Typography>
-              <Box sx={{ display: 'flex', alignItems: 'center', mt: 1 }}>
-                <TrendingDownIcon color="error" fontSize="small" />
-                <Typography variant="body2" color="error" sx={{ ml: 0.5 }}>
-                  -2.3% so với tuần trước
-                </Typography>
-              </Box>
+              {trendHint && (
+                <Box sx={{ display: 'flex', alignItems: 'center', mt: 1 }}>
+                  {trendHint.up ? (
+                    <TrendingUpIcon color="success" fontSize="small" />
+                  ) : (
+                    <TrendingDownIcon color="error" fontSize="small" />
+                  )}
+                  <Typography
+                    variant="body2"
+                    color={trendHint.up ? 'success.main' : 'error'}
+                    sx={{ ml: 0.5 }}
+                  >
+                    {trendHint.up ? '+' : ''}
+                    {trendHint.delta.toFixed(1)} {t('analyticsReport.trendDeltaSuffix')}
+                  </Typography>
+                </Box>
+              )}
             </CardContent>
           </Card>
         </Grid>
@@ -147,13 +220,13 @@ function AnalyticsReport() {
           <Card>
             <CardContent>
               <Typography color="textSecondary" variant="body2">
-                Sinh viên đủ điều kiện
+                {isTeacher ? t('analyticsReport.eligibleTitleTeacher') : t('analyticsReport.eligibleTitleEstimate')}
               </Typography>
               <Typography variant="h3" color="success.main">
-                293/273
+                {overview?.eligible_ratio_text ?? '—'}
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                90,76% đủ điều kiện dự thi
+                {(overview?.eligible_ok_percent ?? 0).toFixed(2)}% đủ điều kiện (ngưỡng 80%)
               </Typography>
             </CardContent>
           </Card>
@@ -163,13 +236,13 @@ function AnalyticsReport() {
           <Card>
             <CardContent>
               <Typography color="textSecondary" variant="body2">
-                Sinh viên nguy cơ
+                {t('analyticsReport.atRiskTitle')}
               </Typography>
               <Typography variant="h3" color="error.main">
-                20
+                {overview?.at_risk_count ?? 0}
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                Dưới 80% chuyên cần
+                {t('analyticsReport.atRiskHint')}
               </Typography>
             </CardContent>
           </Card>
@@ -179,17 +252,14 @@ function AnalyticsReport() {
           <Card>
             <CardContent>
               <Typography color="textSecondary" variant="body2">
-                Tỷ lệ đi trễ TB
+                {t('analyticsReport.lateRate7Days')}
               </Typography>
               <Typography variant="h3" color="warning.main">
-                12.4%
+                {(overview?.late_rate_week ?? 0).toFixed(1)}%
               </Typography>
-              <Box sx={{ display: 'flex', alignItems: 'center', mt: 1 }}>
-                <TrendingUpIcon color="error" fontSize="small" />
-                <Typography variant="body2" color="error" sx={{ ml: 0.5 }}>
-                  +1.8% so với tuần trước
-                </Typography>
-              </Box>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                {t('analyticsReport.lateRateHint')}
+              </Typography>
             </CardContent>
           </Card>
         </Grid>
@@ -200,25 +270,27 @@ function AnalyticsReport() {
         <Grid item xs={12} md={8}>
           <Card>
             <CardContent>
-              <Typography variant="h6" gutterBottom>
-                Xu hướng chuyên cần theo thời gian
-              </Typography>
-              <ResponsiveContainer width="100%" height={300}>
-                <LineChart data={trendData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="week" />
-                  <YAxis domain={[0, 100]} />
-                  <Tooltip />
-                  <Legend />
-                  <Line
-                    type="monotone"
-                    dataKey="tyLe"
-                    stroke="#1976d2"
-                    strokeWidth={3}
-                    name="Tỷ lệ chuyên cần (%)"
-                  />
-                </LineChart>
-              </ResponsiveContainer>
+              <Typography variant="h6" gutterBottom>{t('analyticsReport.trendTitle')}</Typography>
+              {trendData.length === 0 ? (
+                <Typography color="text.secondary">{t('analyticsReport.trendNoData')}</Typography>
+              ) : (
+                <ResponsiveContainer width="100%" height={300}>
+                  <LineChart data={trendData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="name" />
+                    <YAxis domain={[0, 100]} />
+                    <Tooltip />
+                    <Legend />
+                    <Line
+                      type="monotone"
+                      dataKey="tyLe"
+                      stroke="#1976d2"
+                      strokeWidth={3}
+                      name={t('analyticsReport.table.chartRatio')}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
             </CardContent>
           </Card>
         </Grid>
@@ -226,24 +298,26 @@ function AnalyticsReport() {
         <Grid item xs={12} md={4}>
           <Card>
             <CardContent>
-              <Typography variant="h6" gutterBottom>
-                Phân tích hành vi học tập
-              </Typography>
-              <ResponsiveContainer width="100%" height={300}>
-                <RadarChart data={behaviorData}>
-                  <PolarGrid />
-                  <PolarAngleAxis dataKey="subject" />
-                  <PolarRadiusAxis domain={[0, 100]} />
-                  <Radar
-                    name="Điểm"
-                    dataKey="value"
-                    stroke="#1976d2"
-                    fill="#1976d2"
-                    fillOpacity={0.6}
-                  />
-                  <Tooltip />
-                </RadarChart>
-              </ResponsiveContainer>
+              <Typography variant="h6" gutterBottom>{t('analyticsReport.statusDistTitle')}</Typography>
+              {behaviorData.length === 0 ? (
+                <Typography color="text.secondary">{t('analyticsReport.statusDistNoData')}</Typography>
+              ) : (
+                <ResponsiveContainer width="100%" height={300}>
+                  <RadarChart data={behaviorData}>
+                    <PolarGrid />
+                    <PolarAngleAxis dataKey="subject" />
+                    <PolarRadiusAxis domain={[0, 100]} />
+                    <Radar
+                      name={t('analyticsReport.table.radarWeight')}
+                      dataKey="value"
+                      stroke="#1976d2"
+                      fill="#1976d2"
+                      fillOpacity={0.6}
+                    />
+                    <Tooltip />
+                  </RadarChart>
+                </ResponsiveContainer>
+              )}
             </CardContent>
           </Card>
         </Grid>
@@ -254,19 +328,21 @@ function AnalyticsReport() {
         <Grid item xs={12}>
           <Card>
             <CardContent>
-              <Typography variant="h6" gutterBottom>
-                So sánh chuyên cần giữa các lớp
-              </Typography>
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={comparisonData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="lop" />
-                  <YAxis domain={[0, 100]} />
-                  <Tooltip />
-                  <Legend />
-                  <Bar dataKey="tyLe" fill="#2e7d32" name="Tỷ lệ chuyên cần (%)" />
-                </BarChart>
-              </ResponsiveContainer>
+              <Typography variant="h6" gutterBottom>{t('analyticsReport.compareTitle')}</Typography>
+              {comparisonData.length === 0 ? (
+                <Typography color="text.secondary">{t('analyticsReport.compareNoData')}</Typography>
+              ) : (
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={comparisonData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="lop" />
+                    <YAxis domain={[0, 100]} />
+                    <Tooltip />
+                    <Legend />
+                    <Bar dataKey="tyLe" fill="#2e7d32" name={t('analyticsReport.table.chartEligible')} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
             </CardContent>
           </Card>
         </Grid>
@@ -274,38 +350,43 @@ function AnalyticsReport() {
 
       {/* Bảng sinh viên */}
       <Grid container spacing={3}>
-        {/* Top sinh viên */}
         <Grid item xs={12} md={6}>
           <Card>
             <CardContent>
-              <Typography variant="h6" gutterBottom>
-                🏆 Top sinh viên xuất sắc
-              </Typography>
+              <Typography variant="h6" gutterBottom>🏆 {t('analyticsReport.topTitle')}</Typography>
               <TableContainer>
                 <Table size="small">
                   <TableHead>
                     <TableRow>
-                      <TableCell>STT</TableCell>
-                      <TableCell>Mã SV</TableCell>
-                      <TableCell>Họ tên</TableCell>
-                      <TableCell align="right">Tỷ lệ</TableCell>
+                      <TableCell>{t('analyticsReport.table.index')}</TableCell>
+                      <TableCell>{t('analyticsReport.table.studentCode')}</TableCell>
+                      <TableCell>{t('analyticsReport.table.studentName')}</TableCell>
+                      <TableCell align="right">{t('analyticsReport.table.ratio')}</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {topStudents.map((student, index) => (
-                      <TableRow key={student.ma_sv}>
-                        <TableCell>{index + 1}</TableCell>
-                        <TableCell>{student.ma_sv}</TableCell>
-                        <TableCell>{student.ho_ten}</TableCell>
-                        <TableCell align="right">
-                          <Chip
-                            label={`${student.ty_le}%`}
-                            color="success"
-                            size="small"
-                          />
+                    {topStudents.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={4}>
+                          <Typography color="text.secondary">{t('analyticsReport.emptyTop')}</Typography>
                         </TableCell>
                       </TableRow>
-                    ))}
+                    ) : (
+                      topStudents.map((student, index) => (
+                        <TableRow key={student.ma_sv}>
+                          <TableCell>{index + 1}</TableCell>
+                          <TableCell>{student.ma_sv}</TableCell>
+                          <TableCell>{student.ho_ten}</TableCell>
+                          <TableCell align="right">
+                            <Chip
+                              label={`${Number(student.ty_le).toFixed(1)}%`}
+                              color="success"
+                              size="small"
+                            />
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
                   </TableBody>
                 </Table>
               </TableContainer>
@@ -313,45 +394,50 @@ function AnalyticsReport() {
           </Card>
         </Grid>
 
-        {/* Sinh viên cần quan tâm */}
         <Grid item xs={12} md={6}>
           <Card>
             <CardContent>
-              <Typography variant="h6" gutterBottom>
-                ⚠️ Sinh viên cần quan tâm
-              </Typography>
+              <Typography variant="h6" gutterBottom>⚠️ {t('analyticsReport.atRiskCareTitle')}</Typography>
               <TableContainer>
                 <Table size="small">
                   <TableHead>
                     <TableRow>
-                      <TableCell>Mã SV</TableCell>
-                      <TableCell>Họ tên</TableCell>
-                      <TableCell align="right">Tỷ lệ</TableCell>
-                      <TableCell>Cảnh báo</TableCell>
+                      <TableCell>{t('analyticsReport.table.studentCode')}</TableCell>
+                      <TableCell>{t('analyticsReport.table.studentName')}</TableCell>
+                      <TableCell align="right">{t('analyticsReport.table.ratio')}</TableCell>
+                      <TableCell>{t('analyticsReport.table.warning')}</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {atRiskStudents.map((student) => (
-                      <TableRow key={student.ma_sv}>
-                        <TableCell>{student.ma_sv}</TableCell>
-                        <TableCell>{student.ho_ten}</TableCell>
-                        <TableCell align="right">
-                          <Chip
-                            label={`${student.ty_le}%`}
-                            color="error"
-                            size="small"
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <Chip
-                            label={student.ket_luan}
-                            color="warning"
-                            size="small"
-                            icon={<WarningIcon />}
-                          />
+                    {atRiskStudents.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={4}>
+                          <Typography color="text.secondary">{t('analyticsReport.emptyAtRisk')}</Typography>
                         </TableCell>
                       </TableRow>
-                    ))}
+                    ) : (
+                      atRiskStudents.map((student) => (
+                        <TableRow key={student.ma_sv}>
+                          <TableCell>{student.ma_sv}</TableCell>
+                          <TableCell>{student.ho_ten}</TableCell>
+                          <TableCell align="right">
+                            <Chip
+                              label={`${Number(student.ty_le).toFixed(1)}%`}
+                              color="error"
+                              size="small"
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <Chip
+                              label={student.ket_luan}
+                              color="warning"
+                              size="small"
+                              icon={<WarningIcon />}
+                            />
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
                   </TableBody>
                 </Table>
               </TableContainer>
@@ -360,41 +446,29 @@ function AnalyticsReport() {
         </Grid>
       </Grid>
 
-      {/* Khuyến nghị AI */}
+      {/* Tóm tắt */}
       <Card sx={{ mt: 3 }}>
         <CardContent>
-          <Typography variant="h6" gutterBottom>
-            🤖 Phân tích & Khuyến nghị từ AI
-          </Typography>
+          <Typography variant="h6" gutterBottom>{t('analyticsReport.quickSummary')}</Typography>
           <Alert severity="info" sx={{ mb: 2 }}>
-            <Typography variant="subtitle2" fontWeight="bold">
-              Xu hướng chuyên cần:
-            </Typography>
             <Typography variant="body2">
-              Tỷ lệ chuyên cần có xu hướng giảm nhẹ trong 3 tuần gần đây (-4.5%). 
-              Nguyên nhân chính: tăng số lượng sinh viên đi trễ vào buổi sáng (8h-9h).
+              {t('analyticsReport.quickSummaryHint', {
+                avg: (overview?.avg_attendance_rate ?? 0).toFixed(1),
+                riskCount: overview?.at_risk_count ?? 0,
+              })}
             </Typography>
           </Alert>
-
-          <Alert severity="warning" sx={{ mb: 2 }}>
-            <Typography variant="subtitle2" fontWeight="bold">
-              Nhóm nguy cơ:
+          <Box sx={{ mb: 1 }}>
+            <Typography variant="caption" color="text.secondary">
+              {t('analyticsReport.lateRateCaption')}
             </Typography>
-            <Typography variant="body2">
-              8 sinh viên có nguy cơ không đủ điều kiện dự thi. Đề xuất: Gặp gỡ trực tiếp
-              để tìm hiểu nguyên nhân và hỗ trợ kịp thời.
-            </Typography>
-          </Alert>
-
-          <Alert severity="success">
-            <Typography variant="subtitle2" fontWeight="bold">
-              Điểm tích cực:
-            </Typography>
-            <Typography variant="body2">
-              94.7% sinh viên duy trì chuyên cần tốt. Lớp DCCNTT13.10.3 có tỷ lệ cao nhất (92%), 
-              có thể chia sẻ kinh nghiệm quản lý lớp với các lớp khác.
-            </Typography>
-          </Alert>
+            <LinearProgress
+              variant="determinate"
+              value={Math.min(100, overview?.late_rate_week ?? 0)}
+              color={(overview?.late_rate_week ?? 0) > 20 ? 'error' : 'warning'}
+              sx={{ height: 8, borderRadius: 4, mt: 0.5 }}
+            />
+          </Box>
         </CardContent>
       </Card>
     </Box>

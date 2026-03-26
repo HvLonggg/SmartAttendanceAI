@@ -48,7 +48,9 @@ import {
 } from 'recharts';
 import { studentAPI, analyticsAPI, studentPortalAPI } from '../services/api';
 import { getStudentAvatarSrc } from '../utils/studentAvatar';
+import { formatApiError } from '../utils/apiError';
 import { useAuth } from '../auth/AuthContext';
+import { useI18n } from '../i18n/I18nContext';
 
 const COLORS = ['#2e7d32', '#ed6c02', '#d32f2f'];
 
@@ -56,6 +58,8 @@ function StudentDetail() {
   const { maSV } = useParams();
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { t, locale } = useI18n();
+  const dateLocale = locale === 'en' ? 'en-US' : 'vi-VN';
   const [student, setStudent] = useState(null);
   const [analytics, setAnalytics] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -94,7 +98,7 @@ function StudentDetail() {
       setError(null);
     } catch (err) {
       console.error('Error fetching student data:', err);
-      setError('Không thể tải thông tin sinh viên');
+      setError(t('studentDetailPage.loadFail'));
     } finally {
       setLoading(false);
     }
@@ -115,7 +119,7 @@ function StudentDetail() {
           {error}
         </Alert>
         <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/students')}>
-          Quay lại danh sách
+          {t('studentDetailPage.backList')}
         </Button>
       </Box>
     );
@@ -123,7 +127,7 @@ function StudentDetail() {
 
   if (!student) {
     return (
-      <Alert severity="warning">Không tìm thấy thông tin sinh viên</Alert>
+      <Alert severity="warning">{t('studentDetailPage.notFound')}</Alert>
     );
   }
 
@@ -131,10 +135,10 @@ function StudentDetail() {
     return (
       <Box sx={{ p: 2 }}>
         <Alert severity="warning" sx={{ mb: 2 }}>
-          Student chỉ có thể xem thông tin của tài khoản mình.
+          {t('studentDetailPage.studentOnlyMessage')}
         </Alert>
         <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/student')} variant="outlined">
-          Về trang sinh viên
+          {t('studentDetailPage.backStudent')}
         </Button>
       </Box>
     );
@@ -145,9 +149,9 @@ function StudentDetail() {
     return getStudentAvatarSrc(student, avatarKey);
   };
 
+  /** Giảng viên chỉ xem thông tin / chuyên cần, không chỉnh ảnh đại diện */
   const canEditAvatar =
     user?.role === 'ADMIN' ||
-    user?.role === 'TEACHER' ||
     (user?.role === 'STUDENT' && user?.ma_sv === student?.ma_sv);
 
   const canEditStudentProfile =
@@ -162,10 +166,10 @@ function StudentDetail() {
         ho_ten: profileHoTen,
         email: profileEmail,
       });
-      setProfileMsg('Đã cập nhật hồ sơ');
+      setProfileMsg(t('studentDetailPage.updateMsg'));
       await fetchStudentData();
     } catch (err) {
-      setProfileErr(err.response?.data?.detail || 'Không lưu được');
+      setProfileErr(formatApiError(err.response?.data?.detail, t('studentDetailPage.saveFail')));
     } finally {
       setProfileSaving(false);
     }
@@ -180,12 +184,12 @@ function StudentDetail() {
     setAvatarUploading(true);
     try {
       await studentAPI.uploadAvatar(student.ma_sv, file);
-      setAvatarSuccess('Đã cập nhật ảnh đại diện');
+      setAvatarSuccess(t('studentDetailPage.avatarUpdated'));
       await fetchStudentData();
       setAvatarKey((k) => k + 1);
     } catch (err) {
       console.error('Upload avatar error:', err);
-      setAvatarError(err.response?.data?.detail || 'Không thể upload ảnh đại diện');
+      setAvatarError(formatApiError(err.response?.data?.detail, t('studentDetailPage.avatarUploadFail')));
     } finally {
       setAvatarUploading(false);
       // reset để chọn lại cùng file vẫn trigger onChange
@@ -199,12 +203,12 @@ function StudentDetail() {
     setAvatarUploading(true);
     try {
       await studentAPI.deleteAvatar(student.ma_sv);
-      setAvatarSuccess('Đã xóa ảnh đại diện');
+      setAvatarSuccess(t('studentDetailPage.avatarDeleted'));
       await fetchStudentData();
       setAvatarKey((k) => k + 1);
     } catch (err) {
       console.error('Delete avatar error:', err);
-      setAvatarError(err.response?.data?.detail || 'Không thể xóa ảnh đại diện');
+      setAvatarError(formatApiError(err.response?.data?.detail, t('studentDetailPage.avatarDeleteFail')));
     } finally {
       setAvatarUploading(false);
     }
@@ -223,8 +227,8 @@ function StudentDetail() {
   }));
 
   const pieData = [
-    { name: 'Đi học', value: totalAttended },
-    { name: 'Vắng', value: totalClasses - totalAttended },
+    { name: t('studentDetailPage.pie.onAttendance'), value: totalAttended },
+    { name: t('studentDetailPage.pie.absent'), value: totalClasses - totalAttended },
   ];
 
   return (
@@ -246,7 +250,7 @@ function StudentDetail() {
             },
           }}
         >
-          Quay lại
+          {t('studentDetailPage.back')}
         </Button>
       </Box>
 
@@ -307,7 +311,7 @@ function StudentDetail() {
                   {student.ho_ten}
                 </Typography>
                 <Chip
-                  label={student.trang_thai || 'Đang học'}
+                  label={student.trang_thai || t('studentDetailPage.statusDefault')}
                   size="small"
                   sx={{
                     mb: 2,
@@ -346,7 +350,7 @@ function StudentDetail() {
                         },
                       }}
                     >
-                      {student.anh_dai_dien ? 'Đổi ảnh' : 'Tải ảnh lên'}
+                      {student.anh_dai_dien ? t('studentDetailPage.changePhoto') : t('studentDetailPage.uploadPhoto')}
                       <input
                         hidden
                         accept="image/*"
@@ -375,7 +379,7 @@ function StudentDetail() {
                         },
                       }}
                     >
-                      Xóa ảnh
+                      {t('studentDetailPage.removePhoto')}
                     </Button>
                   </Box>
                 )}
@@ -401,7 +405,7 @@ function StudentDetail() {
                   <PersonIcon sx={{ mr: 1, color: 'text.secondary' }} />
                   <Box>
                     <Typography variant="caption" color="text.secondary">
-                      Mã sinh viên
+                      {t('studentDetailPage.fieldStudentId')}
                     </Typography>
                     <Typography variant="body1" fontWeight={500}>
                       {student.ma_sv}
@@ -413,10 +417,10 @@ function StudentDetail() {
                   <SchoolIcon sx={{ mr: 1, color: 'text.secondary' }} />
                   <Box>
                     <Typography variant="caption" color="text.secondary">
-                      Lớp
+                      {t('studentDetailPage.fieldClass')}
                     </Typography>
                     <Typography variant="body1" fontWeight={500}>
-                      {student.lop || 'Chưa có thông tin'}
+                      {student.lop || t('studentDetailPage.noStudentInfo')}
                     </Typography>
                   </Box>
                 </Box>
@@ -425,10 +429,10 @@ function StudentDetail() {
                   <SchoolIcon sx={{ mr: 1, color: 'text.secondary' }} />
                   <Box>
                     <Typography variant="caption" color="text.secondary">
-                      Khoa
+                      {t('studentDetailPage.fieldFaculty')}
                     </Typography>
                     <Typography variant="body1" fontWeight={500}>
-                      {student.khoa || 'Chưa có thông tin'}
+                      {student.khoa || t('studentDetailPage.noStudentInfo')}
                     </Typography>
                   </Box>
                 </Box>
@@ -438,7 +442,7 @@ function StudentDetail() {
                     <EmailIcon sx={{ mr: 1, color: 'text.secondary' }} />
                     <Box>
                       <Typography variant="caption" color="text.secondary">
-                        Email
+                      {t('studentDetailPage.fieldEmail')}
                       </Typography>
                       <Typography variant="body2">
                         {student.email}
@@ -452,10 +456,10 @@ function StudentDetail() {
                     <ScheduleIcon sx={{ mr: 1, color: 'text.secondary' }} />
                     <Box>
                       <Typography variant="caption" color="text.secondary">
-                        Ngày sinh
+                      {t('studentDetailPage.fieldBirthDate')}
                       </Typography>
                       <Typography variant="body1">
-                        {new Date(student.ngay_sinh).toLocaleDateString('vi-VN')}
+                      {new Date(student.ngay_sinh).toLocaleDateString(dateLocale)}
                       </Typography>
                     </Box>
                   </Box>
@@ -465,7 +469,7 @@ function StudentDetail() {
                   <>
                     <Divider sx={{ my: 2 }} />
                     <Typography variant="subtitle2" fontWeight={800} gutterBottom sx={{ color: 'primary.main' }}>
-                      Cập nhật thông tin liên hệ
+                      {t('studentDetailPage.contactUpdateTitle')}
                     </Typography>
                     {profileErr && (
                       <Alert severity="error" sx={{ mb: 1 }}>
@@ -478,7 +482,7 @@ function StudentDetail() {
                       </Alert>
                     )}
                     <TextField
-                      label="Họ và tên"
+                      label={t('studentDetailPage.fullNameLabel')}
                       fullWidth
                       value={profileHoTen}
                       onChange={(e) => setProfileHoTen(e.target.value)}
@@ -486,7 +490,7 @@ function StudentDetail() {
                       size="small"
                     />
                     <TextField
-                      label="Email"
+                      label={t('studentDetailPage.emailLabel')}
                       fullWidth
                       type="email"
                       value={profileEmail}
@@ -495,7 +499,7 @@ function StudentDetail() {
                       size="small"
                     />
                     <Button variant="contained" onClick={handleSaveStudentProfile} disabled={profileSaving} fullWidth>
-                      {profileSaving ? 'Đang lưu...' : 'Lưu thay đổi'}
+                      {profileSaving ? t('studentDetailPage.saving') : t('studentDetailPage.saveChanges')}
                     </Button>
                   </>
                 )}
@@ -511,7 +515,7 @@ function StudentDetail() {
               <Card>
                 <CardContent>
                   <Typography color="text.secondary" variant="body2" gutterBottom>
-                    Tỷ lệ chuyên cần
+                    {t('studentDetailPage.overallAttendanceRate')}
                   </Typography>
                   <Typography variant="h3" color="primary" fontWeight="bold">
                     {overallRate.toFixed(1)}%
@@ -530,13 +534,13 @@ function StudentDetail() {
               <Card>
                 <CardContent>
                   <Typography color="text.secondary" variant="body2" gutterBottom>
-                    Tổng buổi học
+                    {t('studentDetailPage.totalSessions')}
                   </Typography>
                   <Typography variant="h3" color="primary" fontWeight="bold">
                     {totalClasses}
                   </Typography>
                   <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                    Có mặt: {totalAttended}
+                    {t('studentDetailPage.presentCount', { count: totalAttended })}
                   </Typography>
                 </CardContent>
               </Card>
@@ -546,13 +550,13 @@ function StudentDetail() {
               <Card>
                 <CardContent>
                   <Typography color="text.secondary" variant="body2" gutterBottom>
-                    Môn đủ ĐK
+                    {t('studentDetailPage.eligibleCourses')}
                   </Typography>
                   <Typography variant="h3" color="success.main" fontWeight="bold">
                     {eligibleClasses}
                   </Typography>
                   <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                    / {analytics.length} môn
+                    {t('studentDetailPage.eligibleCoursesSuffix', { total: analytics.length })}
                   </Typography>
                 </CardContent>
               </Card>
@@ -562,7 +566,7 @@ function StudentDetail() {
               <Card>
                 <CardContent>
                   <Typography color="text.secondary" variant="body2" gutterBottom>
-                    Tình trạng
+                    {t('studentDetailPage.statusTitle')}
                   </Typography>
                   <Typography
                     variant="h4"
@@ -577,7 +581,7 @@ function StudentDetail() {
                     )}
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
-                    {overallRate >= 80 ? 'Đủ điều kiện' : 'Không đủ ĐK'}
+                    {overallRate >= 80 ? t('studentDetailPage.statusEligible') : t('studentDetailPage.statusIneligible')}
                   </Typography>
                 </CardContent>
               </Card>
@@ -588,7 +592,7 @@ function StudentDetail() {
               <Card>
                 <CardContent>
                   <Typography variant="h6" gutterBottom>
-                    Tỷ lệ chuyên cần theo môn học
+                    {t('studentDetailPage.chartAttendanceByCourseTitle')}
                   </Typography>
                   <ResponsiveContainer width="100%" height={250}>
                     <LineChart data={attendanceData}>
@@ -602,7 +606,7 @@ function StudentDetail() {
                         dataKey="tyLe"
                         stroke="#1976d2"
                         strokeWidth={2}
-                        name="Tỷ lệ (%)"
+                        name={t('studentDetailPage.chartRatioLabel')}
                       />
                     </LineChart>
                   </ResponsiveContainer>
@@ -614,7 +618,7 @@ function StudentDetail() {
               <Card>
                 <CardContent>
                   <Typography variant="h6" gutterBottom>
-                    Phân bố điểm danh
+                    {t('studentDetailPage.distributionTitle')}
                   </Typography>
                   <ResponsiveContainer width="100%" height={250}>
                     <PieChart>
@@ -646,17 +650,17 @@ function StudentDetail() {
           <Card>
             <CardContent>
               <Typography variant="h6" gutterBottom>
-                Chi tiết chuyên cần theo môn học
+                {t('studentDetailPage.detailsTitle')}
               </Typography>
               <TableContainer>
                 <Table>
                   <TableHead>
                     <TableRow>
-                      <TableCell>Mã lớp học phần</TableCell>
-                      <TableCell align="center">Số buổi có mặt</TableCell>
-                      <TableCell align="center">Tổng số buổi</TableCell>
-                      <TableCell align="center">Tỷ lệ (%)</TableCell>
-                      <TableCell align="center">Kết luận</TableCell>
+                      <TableCell>{t('studentDetailPage.table.courseClassCode')}</TableCell>
+                      <TableCell align="center">{t('studentDetailPage.table.presentCount')}</TableCell>
+                      <TableCell align="center">{t('studentDetailPage.table.totalCount')}</TableCell>
+                      <TableCell align="center">{t('studentDetailPage.table.ratio')}</TableCell>
+                      <TableCell align="center">{t('studentDetailPage.table.conclusion')}</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -695,7 +699,7 @@ function StudentDetail() {
               {analytics.length === 0 && (
                 <Box sx={{ textAlign: 'center', py: 4 }}>
                   <Typography color="text.secondary">
-                    Chưa có dữ liệu chuyên cần
+                    {t('studentDetailPage.emptyAttendance')}
                   </Typography>
                 </Box>
               )}
@@ -708,12 +712,10 @@ function StudentDetail() {
           <Grid item xs={12}>
             <Alert severity="warning" icon={<CancelIcon />}>
               <Typography variant="subtitle2" fontWeight="bold">
-                Cảnh báo chuyên cần
+                {t('studentDetailPage.warningTitle')}
               </Typography>
               <Typography variant="body2">
-                Sinh viên có nguy cơ không đủ điều kiện dự thi. Tỷ lệ chuyên cần tổng thể:{' '}
-                {overallRate.toFixed(1)}% (yêu cầu ≥ 80%). Cần gặp sinh viên để tìm hiểu
-                nguyên nhân và hỗ trợ kịp thời.
+                {t('studentDetailPage.warningMessage', { rate: overallRate.toFixed(1) })}
               </Typography>
             </Alert>
           </Grid>

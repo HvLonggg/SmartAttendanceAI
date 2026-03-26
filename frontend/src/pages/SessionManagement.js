@@ -32,6 +32,7 @@ import {
   Schedule as ScheduleIcon,
 } from '@mui/icons-material';
 import { attendanceAPI } from '../services/api';
+import { useI18n } from '../i18n/I18nContext';
 
 function TabPanel({ children, value, index, ...other }) {
   return (
@@ -47,6 +48,8 @@ function TabPanel({ children, value, index, ...other }) {
 }
 
 function SessionManagement() {
+  const { t, locale } = useI18n();
+  const dateLocale = locale === 'en' ? 'en-US' : 'vi-VN';
   const [sessions, setSessions] = useState([]);
   const [selectedSession, setSelectedSession] = useState(null);
   const [attendanceList, setAttendanceList] = useState([]);
@@ -71,7 +74,7 @@ function SessionManagement() {
     setError(null);
   } catch (err) {
     console.error('❌ Error details:', err.response || err); // ← LOG CHI TIẾT
-    setError('Không thể tải danh sách buổi học');
+    setError(t('sessionManagement.loadSessionsFail'));
   } finally {
     setLoading(false);
   }
@@ -86,7 +89,7 @@ function SessionManagement() {
       setOpenDialog(true);
     } catch (err) {
       console.error('Error fetching attendance:', err);
-      setError('Không thể tải danh sách điểm danh');
+      setError(t('sessionManagement.loadAttendanceFail'));
     } finally {
       setLoading(false);
     }
@@ -137,13 +140,13 @@ function SessionManagement() {
       <Table>
         <TableHead>
           <TableRow>
-            <TableCell>Mã buổi</TableCell>
-            <TableCell>Môn học</TableCell>
-            <TableCell>Giảng viên</TableCell>
-            <TableCell>Ngày học</TableCell>
-            <TableCell>Giờ bắt đầu</TableCell>
-            <TableCell>Trạng thái</TableCell>
-            <TableCell align="right">Thao tác</TableCell>
+            <TableCell>{t('sessionManagement.sessionCode')}</TableCell>
+            <TableCell>{t('sessionManagement.courseName')}</TableCell>
+            <TableCell>{t('sessionManagement.teacher')}</TableCell>
+            <TableCell>{t('sessionManagement.sessionDate')}</TableCell>
+            <TableCell>{t('sessionManagement.startTime')}</TableCell>
+            <TableCell>{t('sessionManagement.status')}</TableCell>
+            <TableCell align="right">{t('sessionManagement.actions')}</TableCell>
           </TableRow>
         </TableHead>
         <TableBody>
@@ -151,7 +154,7 @@ function SessionManagement() {
             <TableRow>
               <TableCell colSpan={7} align="center">
                 <Typography color="text.secondary" sx={{ py: 3 }}>
-                  Không có buổi học nào
+                  {t('sessionManagement.emptySessions')}
                 </Typography>
               </TableCell>
             </TableRow>
@@ -171,9 +174,9 @@ function SessionManagement() {
                   </TableCell>
                   <TableCell>{session.giang_vien}</TableCell>
                   <TableCell>
-                    {new Date(session.ngay_hoc).toLocaleDateString('vi-VN')}
+                    {new Date(session.ngay_hoc).toLocaleDateString(dateLocale)}
                     {isToday && (
-                      <Chip label="Hôm nay" color="primary" size="small" sx={{ ml: 1 }} />
+                      <Chip label={t('sessionManagement.today')} color="primary" size="small" sx={{ ml: 1 }} />
                     )}
                   </TableCell>
                   <TableCell>
@@ -184,13 +187,13 @@ function SessionManagement() {
                   </TableCell>
                   <TableCell>
                     {tabValue === 0 && (
-                      <Chip label="Sắp diễn ra" color="info" size="small" />
+                      <Chip label={t('sessionManagement.tabUpcoming')} color="info" size="small" />
                     )}
                     {tabValue === 1 && (
-                      <Chip label="Đang diễn ra" color="success" size="small" />
+                      <Chip label={t('sessionManagement.tabOngoing')} color="success" size="small" />
                     )}
                     {tabValue === 2 && (
-                      <Chip label="Đã kết thúc" color="default" size="small" />
+                      <Chip label={t('sessionManagement.tabCompleted')} color="default" size="small" />
                     )}
                   </TableCell>
                   <TableCell align="right">
@@ -222,16 +225,14 @@ function SessionManagement() {
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4" fontWeight="bold">
-          Quản lý Buổi học
-        </Typography>
+        <Typography variant="h4" fontWeight="bold">{t('sessionManagement.title')}</Typography>
         <Button
           variant="outlined"
           startIcon={<RefreshIcon />}
           onClick={fetchTodaySessions}
           disabled={loading}
         >
-          Làm mới
+          {t('sessionManagement.refresh')}
         </Button>
       </Box>
 
@@ -249,7 +250,7 @@ function SessionManagement() {
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <Box>
                   <Typography color="text.secondary" variant="body2">
-                    Tổng số buổi học
+                    {t('sessionManagement.statsTotal')}
                   </Typography>
                   <Typography variant="h4" fontWeight="bold">
                     {sessions.length}
@@ -266,7 +267,7 @@ function SessionManagement() {
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <Box>
                   <Typography color="text.secondary" variant="body2">
-                    Đang diễn ra
+                    {t('sessionManagement.statsOngoing')}
                   </Typography>
                   <Typography variant="h4" fontWeight="bold" color="success.main">
                     {ongoingSessions.length}
@@ -283,7 +284,7 @@ function SessionManagement() {
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <Box>
                   <Typography color="text.secondary" variant="body2">
-                    Sắp diễn ra
+                    {t('sessionManagement.statsUpcoming')}
                   </Typography>
                   <Typography variant="h4" fontWeight="bold" color="info.main">
                     {upcomingSessions.length}
@@ -302,21 +303,21 @@ function SessionManagement() {
             <Tab
               label={
                 <Badge badgeContent={upcomingSessions.length} color="primary">
-                  Sắp diễn ra
+                  {t('sessionManagement.tabUpcoming')}
                 </Badge>
               }
             />
             <Tab
               label={
                 <Badge badgeContent={ongoingSessions.length} color="success">
-                  Đang diễn ra
+                  {t('sessionManagement.tabOngoing')}
                 </Badge>
               }
             />
             <Tab
               label={
                 <Badge badgeContent={completedSessions.length} color="default">
-                  Đã kết thúc
+                  {t('sessionManagement.tabCompleted')}
                 </Badge>
               }
             />
@@ -341,12 +342,12 @@ function SessionManagement() {
         <DialogTitle>
           {selectedSession && (
             <Box>
-              <Typography variant="h6">Danh sách điểm danh</Typography>
+              <Typography variant="h6">{t('sessionManagement.dialogTitle')}</Typography>
               <Typography variant="body2" color="text.secondary">
                 {selectedSession.ten_mon} - {selectedSession.giang_vien}
               </Typography>
               <Typography variant="caption" color="text.secondary">
-                {new Date(selectedSession.ngay_hoc).toLocaleDateString('vi-VN')} |{' '}
+                {new Date(selectedSession.ngay_hoc).toLocaleDateString(dateLocale)} |{' '}
                 {selectedSession.gio_bat_dau}
               </Typography>
             </Box>
@@ -358,22 +359,26 @@ function SessionManagement() {
               <CircularProgress />
             </Box>
           ) : attendanceList.length === 0 ? (
-            <Alert severity="info">Chưa có sinh viên nào điểm danh</Alert>
+            <Alert severity="info">{t('sessionManagement.emptyAttendanceList')}</Alert>
           ) : (
             <>
               <Box sx={{ mb: 2, display: 'flex', gap: 2 }}>
                 <Chip
-                  label={`Tổng: ${attendanceList.length}`}
+                  label={t('sessionManagement.countsTotal', { count: attendanceList.length })}
                   color="primary"
                   variant="outlined"
                 />
                 <Chip
-                  label={`Đúng giờ: ${attendanceList.filter(a => a.trang_thai === 'Đúng giờ').length}`}
+                  label={t('sessionManagement.countsOnTime', {
+                    count: attendanceList.filter((a) => a.trang_thai === 'Đúng giờ').length,
+                  })}
                   color="success"
                   variant="outlined"
                 />
                 <Chip
-                  label={`Trễ: ${attendanceList.filter(a => a.trang_thai === 'Trễ').length}`}
+                  label={t('sessionManagement.countsLate', {
+                    count: attendanceList.filter((a) => a.trang_thai === 'Trễ').length,
+                  })}
                   color="warning"
                   variant="outlined"
                 />
@@ -383,12 +388,12 @@ function SessionManagement() {
                 <Table size="small">
                   <TableHead>
                     <TableRow>
-                      <TableCell>STT</TableCell>
-                      <TableCell>Mã SV</TableCell>
-                      <TableCell>Họ tên</TableCell>
-                      <TableCell>Lớp</TableCell>
-                      <TableCell>Thời gian quét</TableCell>
-                      <TableCell>Trạng thái</TableCell>
+                      <TableCell>{t('sessionManagement.dialogCols.index')}</TableCell>
+                      <TableCell>{t('sessionManagement.dialogCols.studentCode')}</TableCell>
+                      <TableCell>{t('sessionManagement.dialogCols.studentName')}</TableCell>
+                      <TableCell>{t('sessionManagement.dialogCols.className')}</TableCell>
+                      <TableCell>{t('sessionManagement.dialogCols.scanTime')}</TableCell>
+                      <TableCell>{t('sessionManagement.dialogCols.recordStatus')}</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -399,7 +404,7 @@ function SessionManagement() {
                         <TableCell>{record.ho_ten}</TableCell>
                         <TableCell>{record.lop}</TableCell>
                         <TableCell>
-                          {new Date(record.thoi_gian_quet).toLocaleTimeString('vi-VN')}
+                          {new Date(record.thoi_gian_quet).toLocaleTimeString(dateLocale)}
                         </TableCell>
                         <TableCell>
                           <Chip
@@ -417,9 +422,9 @@ function SessionManagement() {
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleCloseDialog}>Đóng</Button>
+          <Button onClick={handleCloseDialog}>{t('sessionManagement.dialogClose')}</Button>
           <Button variant="contained" onClick={() => window.print()}>
-            In danh sách
+            {t('sessionManagement.dialogPrint')}
           </Button>
         </DialogActions>
       </Dialog>

@@ -2,12 +2,14 @@ import React, { useState } from 'react';
 import { Box, Button, Card, CardContent, TextField, Typography, Alert, Stack, InputAdornment, IconButton } from '@mui/material';
 import Visibility from '@mui/icons-material/Visibility';
 import VisibilityOff from '@mui/icons-material/VisibilityOff';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
+import { formatApiError } from '../../utils/apiError';
 import AuthLayout from '../../layouts/AuthLayout';
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { login } = useAuth();
 
   const [username, setUsername] = useState('');
@@ -16,17 +18,22 @@ export default function LoginPage() {
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
 
+  const [dismissRegMsg, setDismissRegMsg] = useState(false);
+  const registeredOk = location.state?.registered === true && !dismissRegMsg;
+
   const onSubmit = async (e) => {
     e.preventDefault();
     setError(null);
     setBusy(true);
     try {
       const me = await login({ username, password });
-      if (me.role === 'ADMIN') navigate('/analytics');
-      else if (me.role === 'TEACHER') navigate('/sessions');
-      else navigate('/student');
+      const role = (me?.role && String(me.role).toUpperCase()) || '';
+      if (role === 'ADMIN') navigate('/analytics', { replace: true });
+      else if (role === 'TEACHER') navigate('/dashboard', { replace: true });
+      else if (role === 'STUDENT') navigate('/student', { replace: true });
+      else navigate('/dashboard', { replace: true });
     } catch (err) {
-      setError(err.response?.data?.detail || 'Đăng nhập thất bại');
+      setError(formatApiError(err.response?.data?.detail, 'Đăng nhập thất bại'));
     } finally {
       setBusy(false);
     }
@@ -40,28 +47,24 @@ export default function LoginPage() {
         </Typography>
         <Card sx={{ borderRadius: 3, overflow: 'hidden' }}>
           <CardContent sx={{ p: 3 }}>
+            {registeredOk && (
+              <Alert severity="success" sx={{ mb: 2 }} onClose={() => setDismissRegMsg(true)}>
+                Đăng ký thành công. Hãy đăng nhập bằng username và mật khẩu vừa tạo.
+              </Alert>
+            )}
             {error && (
               <Alert severity="error" sx={{ mb: 2 }}>
                 {error}
-                {error.includes('chưa xác thực OTP') && (
-                  <Typography variant="body2" component="span" display="block" sx={{ mt: 1 }}>
-                    Sau khi đăng ký, bạn cần nhập mã OTP (gửi qua email hoặc hiển thị trên màn hình) tại trang{' '}
-                    <Link to="/auth/verify?purpose=register" style={{ fontWeight: 700 }}>
-                      Xác thực OTP
-                    </Link>
-                    {' '}— xác thực xong mới đăng nhập được.
-                  </Typography>
-                )}
               </Alert>
             )}
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-              Dùng tên đăng nhập (username) đã đăng ký — không phải email hay mã SV/MaGV.
+              Dùng <strong>username</strong> và <strong>mật khẩu</strong> đã đăng ký (không dùng email hay mã SV/MaGV để đăng nhập).
             </Typography>
             <form onSubmit={onSubmit}>
               <Stack spacing={2}>
                 <TextField
                   label="Tên đăng nhập (username)"
-                  placeholder="Nhập username đã đăng ký"
+                  placeholder="Nhập username"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   required
@@ -99,12 +102,6 @@ export default function LoginPage() {
                   Đăng ký
                 </Link>
               </Typography>
-              <Typography variant="body2" sx={{ mt: 1 }}>
-                Quên mật khẩu?{' '}
-                <Link to="/auth/forgot" style={{ fontWeight: 700 }}>
-                  Lấy lại
-                </Link>
-              </Typography>
             </Box>
           </CardContent>
         </Card>
@@ -112,4 +109,3 @@ export default function LoginPage() {
     </AuthLayout>
   );
 }
-

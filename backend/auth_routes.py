@@ -9,6 +9,7 @@ from database.db_connection import get_connection
 import os
 import io
 import re
+import unicodedata
 import secrets
 import hashlib
 import hmac
@@ -54,6 +55,16 @@ os.makedirs(AUTH_AVATARS_DIR, exist_ok=True)
 
 def normalize_email(email: str) -> str:
     return (email or "").strip().lower()
+
+
+def synthetic_email_for_username(username: str) -> str:
+    """Email nội bộ duy nhất theo username (không cần người dùng nhập email)."""
+    u = (username or "").strip().lower()
+    safe = re.sub(r"[^a-z0-9._-]+", "_", u, flags=re.IGNORECASE)
+    safe = safe.strip("._") or "user"
+    if len(safe) > 64:
+        safe = safe[:64]
+    return f"{safe}@local.smartattendance"
 
 
 def b64url_encode(raw: bytes) -> str:
@@ -198,6 +209,18 @@ def ensure_auth_tables() -> None:
     cursor.execute("IF COL_LENGTH('dbo.NguoiDung','HoTen') IS NULL ALTER TABLE dbo.NguoiDung ADD HoTen NVARCHAR(120) NULL")
     cursor.execute("IF COL_LENGTH('dbo.NguoiDung','MaSV') IS NULL ALTER TABLE dbo.NguoiDung ADD MaSV NVARCHAR(30) NULL")
     cursor.execute("IF COL_LENGTH('dbo.NguoiDung','MaGV') IS NULL ALTER TABLE dbo.NguoiDung ADD MaGV NVARCHAR(30) NULL")
+    cursor.execute("IF COL_LENGTH('dbo.NguoiDung','MaKhoa') IS NULL ALTER TABLE dbo.NguoiDung ADD MaKhoa NVARCHAR(20) NULL")
+
+    cursor.execute("""
+    IF OBJECT_ID('dbo.Khoa', 'U') IS NULL
+    BEGIN
+        CREATE TABLE dbo.Khoa (
+            MaKhoa NVARCHAR(20) NOT NULL PRIMARY KEY,
+            TenKhoa NVARCHAR(200) NOT NULL,
+            GhiChu NVARCHAR(500) NULL
+        );
+    END
+    """)
 
     cursor.execute("""
     IF OBJECT_ID('dbo.XacThucOtp', 'U') IS NULL
@@ -235,6 +258,12 @@ def ensure_auth_tables() -> None:
     """)
 
     cursor.execute("IF COL_LENGTH('dbo.LopHocPhan','MaGV') IS NULL ALTER TABLE dbo.LopHocPhan ADD MaGV NVARCHAR(30) NULL")
+
+    # Bảng GiangVien cũ có thể thiếu cột — cần cho PATCH hồ sơ & API quá trình công tác
+    cursor.execute("IF COL_LENGTH('dbo.GiangVien','Email') IS NULL ALTER TABLE dbo.GiangVien ADD Email NVARCHAR(320) NULL")
+    cursor.execute("IF COL_LENGTH('dbo.GiangVien','DienThoai') IS NULL ALTER TABLE dbo.GiangVien ADD DienThoai NVARCHAR(30) NULL")
+    cursor.execute("IF COL_LENGTH('dbo.GiangVien','CreatedAt') IS NULL ALTER TABLE dbo.GiangVien ADD CreatedAt DATETIME2 NULL")
+    cursor.execute("UPDATE dbo.GiangVien SET CreatedAt = SYSUTCDATETIME() WHERE CreatedAt IS NULL")
 
     # Seed giảng viên từ danh sách tên hiện có trong LopHocPhan.GiangVien
     cursor.execute("""
@@ -303,6 +332,9 @@ def ensure_auth_tables() -> None:
     END
     """)
 
+    # Bỏ bắt buộc xác thực OTP: tất cả tài khoản được coi là đã kích hoạt
+    cursor.execute("UPDATE dbo.NguoiDung SET IsVerified = 1 WHERE IsVerified = 0")
+
     conn.commit()
     cursor.close()
     conn.close()
@@ -368,14 +400,26 @@ def role_allowed(role: str) -> bool:
 
 
 class RegisterRequest(BaseModel):
-    username: str  # tên tài khoản đăng nhập
-    password: str
+    username: Optional[str] = None  # STUDENT: có thể để trống để hệ thống tự sinh
+    password: Optional[str] = None  # STUDENT: có thể để trống để hệ thống tự sinh
     role: str  # STUDENT / TEACHER
     ho_ten: str
     ma_sv: Optional[str] = None
     ma_gv: Optional[str] = None
-    email: str
+    ma_khoa: Optional[str] = None  # TEACHER: chọn khoa/bộ môn — hệ thống cấp MaGV tự động
+    chuyen_nganh: Optional[str] = None  # TEACHER: chuyên ngành theo khoa trong CSDL
+    email: Optional[str] = None  # tuỳ chọn; nếu không có → gán email nội bộ theo username
     phone: Optional[str] = None
+
+
+class TeacherProfileUpdate(BaseModel):
+    email: Optional[str] = None
+    phone: Optional[str] = None
+
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
 
 
 class VerifyOtpRequest(BaseModel):
@@ -415,6 +459,8 @@ class MeResponse(BaseModel):
     ho_ten: Optional[str] = None
     ma_sv: Optional[str] = None
     ma_gv: Optional[str] = None
+    ma_khoa: Optional[str] = None
+    ten_khoa: Optional[str] = None
     role: str
     email: str
     phone: Optional[str]
@@ -422,6 +468,13 @@ class MeResponse(BaseModel):
     is_locked: bool
     avatar: Optional[str]
     profile: Dict[str, Any] = {}
+
+
+class StudentCredentialItem(BaseModel):
+    ma_sv: str
+    ho_ten: str
+    username: str
+    password: str
 
 
 def get_auth_bearer_token(credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)) -> str:
@@ -441,7 +494,7 @@ def get_current_user(token: str = Depends(get_auth_bearer_token)) -> Dict[str, A
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT Id, Username, HoTen, MaSV, MaGV, Role, Email, Phone, IsVerified, IsLocked, LockReason, Avatar "
+        "SELECT Id, Username, HoTen, MaSV, MaGV, MaKhoa, Role, Email, Phone, IsVerified, IsLocked, LockReason, Avatar "
         "FROM dbo.NguoiDung WHERE Id = ? AND Username = ?",
         (user_id, username),
     )
@@ -458,13 +511,14 @@ def get_current_user(token: str = Depends(get_auth_bearer_token)) -> Dict[str, A
         "ho_ten": row[2],
         "ma_sv": row[3],
         "ma_gv": row[4],
-        "role": row[5],
-        "email": row[6],
-        "phone": row[7],
-        "is_verified": bool(row[8]),
-        "is_locked": bool(row[9]),
-        "lock_reason": row[10],
-        "avatar": row[11],
+        "ma_khoa": row[5],
+        "role": row[6],
+        "email": row[7],
+        "phone": row[8],
+        "is_verified": bool(row[9]),
+        "is_locked": bool(row[10]),
+        "lock_reason": row[11],
+        "avatar": row[12],
     }
 
 
@@ -474,8 +528,6 @@ def require_role(*roles: str):
             raise HTTPException(status_code=403, detail=f"Tài khoản đang bị khóa: {current.get('lock_reason') or ''}".strip())
         if current["role"] not in roles:
             raise HTTPException(status_code=403, detail="Không đủ quyền")
-        if not current["is_verified"]:
-            raise HTTPException(status_code=403, detail="Tài khoản chưa xác thực OTP")
         return current
 
     return _dep
@@ -532,14 +584,25 @@ def ensure_teacher_profile_for_registration(ma_gv: str, ho_ten: str, email: str,
                     detail="Mã giảng viên đã tồn tại trong hệ thống với họ tên khác. Kiểm tra lại MaGV hoặc liên hệ quản trị.",
                 )
             conn.commit()
-            return
+        else:
+            cursor.execute(
+                """
+                INSERT INTO dbo.GiangVien (MaGV, HoTen, Email, DienThoai, TrangThai)
+                VALUES (?, ?, ?, ?, N'Đã đăng ký')
+                """,
+                (ma_gv, ho_ten, email or None, (phone or "").strip() or None),
+            )
+            conn.commit()
 
+        # Gắn MaGV cho LopHocPhan nếu hệ thống trước đó chỉ lưu tên giảng viên (GiangVien)
         cursor.execute(
             """
-            INSERT INTO dbo.GiangVien (MaGV, HoTen, Email, DienThoai, TrangThai)
-            VALUES (?, ?, ?, ?, N'Đã đăng ký')
+            UPDATE dbo.LopHocPhan
+            SET MaGV = ?
+            WHERE LTRIM(RTRIM(GiangVien)) = LTRIM(RTRIM(?))
+              AND (MaGV IS NULL OR LTRIM(RTRIM(MaGV)) = '')
             """,
-            (ma_gv, ho_ten, email or None, (phone or "").strip() or None),
+            (ma_gv, ho_ten),
         )
         conn.commit()
     except HTTPException:
@@ -556,6 +619,81 @@ def ensure_teacher_profile_for_registration(ma_gv: str, ho_ten: str, email: str,
         conn.close()
 
 
+def _next_ma_gv_auto(cursor) -> str:
+    cursor.execute(
+        """
+        SELECT ISNULL(MAX(
+            CASE
+                WHEN MaGV LIKE N'GV%' AND TRY_CAST(SUBSTRING(MaGV, 3, 20) AS BIGINT) IS NOT NULL
+                THEN TRY_CAST(SUBSTRING(MaGV, 3, 20) AS BIGINT)
+                ELSE 0
+            END
+        ), 0) + 1
+        FROM dbo.GiangVien
+        """
+    )
+    n = int(cursor.fetchone()[0])
+    return f"GV{n:06d}"
+
+
+def ensure_teacher_register_with_khoa(ma_khoa: str, ho_ten: str, email: str, phone: Optional[str]) -> str:
+    """
+    Đăng ký giảng viên theo khoa: kiểm tra MaKhoa, cấp MaGV mới, thêm vào GiangVien.
+    """
+    ma_khoa = (ma_khoa or "").strip()
+    ho_ten = (ho_ten or "").strip()
+    if not ma_khoa or not ho_ten:
+        raise HTTPException(status_code=400, detail="Thiếu mã khoa hoặc họ tên")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT COUNT(*) FROM dbo.Khoa WHERE LTRIM(RTRIM(MaKhoa)) = LTRIM(RTRIM(?))", (ma_khoa,))
+        if cursor.fetchone()[0] == 0:
+            raise HTTPException(status_code=400, detail="Khoa/bộ môn không tồn tại trong hệ thống")
+        ma_gv = _next_ma_gv_auto(cursor)
+        cursor.execute(
+            "SELECT COUNT(*) FROM dbo.GiangVien WHERE LTRIM(RTRIM(MaGV)) = LTRIM(RTRIM(?))",
+            (ma_gv,),
+        )
+        if cursor.fetchone()[0] > 0:
+            ma_gv = _next_ma_gv_auto(cursor)
+        cursor.execute(
+            "SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = N'dbo' AND TABLE_NAME = N'GiangVien' AND COLUMN_NAME = N'MaKhoa'"
+        )
+        has_mk = cursor.fetchone() is not None
+        if has_mk:
+            cursor.execute(
+                """
+                INSERT INTO dbo.GiangVien (MaGV, HoTen, Email, DienThoai, TrangThai, MaKhoa)
+                VALUES (?, ?, ?, ?, N'Đã đăng ký', ?)
+                """,
+                (ma_gv, ho_ten, email or None, (phone or "").strip() or None, ma_khoa),
+            )
+        else:
+            cursor.execute(
+                """
+                INSERT INTO dbo.GiangVien (MaGV, HoTen, Email, DienThoai, TrangThai)
+                VALUES (?, ?, ?, ?, N'Đã đăng ký')
+                """,
+                (ma_gv, ho_ten, email or None, (phone or "").strip() or None),
+            )
+        conn.commit()
+        return ma_gv
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as e:
+        conn.rollback()
+        err = str(e)
+        if "PRIMARY KEY" in err or "duplicate" in err.lower() or "2627" in err:
+            raise HTTPException(status_code=400, detail="Không thể tạo mã giảng viên, thử lại") from e
+        raise HTTPException(status_code=500, detail=f"Không thể tạo hồ sơ giảng viên: {e}") from e
+    finally:
+        cursor.close()
+        conn.close()
+
+
 def get_student_name(ma_sv: str) -> Optional[str]:
     conn = get_connection()
     cursor = conn.cursor()
@@ -566,17 +704,133 @@ def get_student_name(ma_sv: str) -> Optional[str]:
     return row[0] if row else None
 
 
+def _strip_accents(s: str) -> str:
+    s = (s or "").replace("Đ", "D").replace("đ", "d")
+    return "".join(ch for ch in unicodedata.normalize("NFD", s) if unicodedata.category(ch) != "Mn")
+
+
+def _student_name_parts(ho_ten: str) -> List[str]:
+    return [p for p in re.split(r"\s+", (ho_ten or "").strip()) if p]
+
+
+def _build_student_username_base(ho_ten: str) -> str:
+    parts = _student_name_parts(ho_ten)
+    if not parts:
+        return "student"
+    if len(parts) == 1:
+        return parts[0]
+    return f"{parts[0]} {parts[-1]}"
+
+
+def _build_student_password(ho_ten: str) -> str:
+    parts = _student_name_parts(ho_ten)
+    token = parts[-1] if parts else "Student"
+    token = _strip_accents(token)
+    token = re.sub(r"[^A-Za-z0-9]", "", token)
+    token = (token[:1].upper() + token[1:].lower()) if token else "Student"
+    return f"{token}123@"
+
+
+def _next_student_username(cursor, base: str) -> str:
+    candidate = (base or "").strip() or "student"
+    cursor.execute("SELECT COUNT(*) FROM dbo.NguoiDung WHERE Username = ?", (candidate,))
+    if cursor.fetchone()[0] == 0:
+        return candidate
+
+    idx = 2
+    while idx < 10000:
+        next_u = f"{candidate} {idx}"
+        cursor.execute("SELECT COUNT(*) FROM dbo.NguoiDung WHERE Username = ?", (next_u,))
+        if cursor.fetchone()[0] == 0:
+            return next_u
+        idx += 1
+    raise HTTPException(status_code=500, detail="Không thể cấp username tự động cho sinh viên")
+
+
+def _next_ma_sv_auto(cursor) -> str:
+    cursor.execute(
+        """
+        SELECT
+          ISNULL(MAX(CASE WHEN TRY_CAST(MaSV AS BIGINT) IS NOT NULL THEN TRY_CAST(MaSV AS BIGINT) END), 0) + 1,
+          ISNULL(MAX(CASE WHEN TRY_CAST(MaSV AS BIGINT) IS NOT NULL THEN LEN(MaSV) END), 8)
+        FROM dbo.SinhVien
+        """
+    )
+    row = cursor.fetchone()
+    next_num = int(row[0] or 1)
+    pad_len = int(row[1] or 8)
+    return str(next_num).zfill(max(4, min(12, pad_len)))
+
+
+@auth_router.get("/khoa")
+async def list_khoa():
+    """Danh sách khoa/bộ môn (đăng ký giảng viên)."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT MaKhoa, TenKhoa, GhiChu FROM dbo.Khoa ORDER BY MaKhoa"
+        )
+        return [
+            {"ma_khoa": r[0], "ten_khoa": r[1], "ghi_chu": r[2]}
+            for r in cursor.fetchall()
+        ]
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@auth_router.get("/khoa-structure")
+async def list_khoa_structure():
+    """
+    Danh sách khoa kèm chuyên ngành đang có trong MonHoc để đăng ký giảng viên.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT k.MaKhoa, k.TenKhoa, k.GhiChu
+            FROM dbo.Khoa k
+            ORDER BY k.MaKhoa
+            """
+        )
+        khoa_rows = cursor.fetchall()
+        data = []
+        for r in khoa_rows:
+            ma_khoa = (r[0] or "").strip()
+            cursor.execute(
+                """
+                SELECT DISTINCT mh.ChuyenNganh
+                FROM dbo.MonHoc mh
+                WHERE LTRIM(RTRIM(ISNULL(mh.MaKhoa,''))) = LTRIM(RTRIM(?))
+                  AND ISNULL(LTRIM(RTRIM(mh.ChuyenNganh)), '') <> ''
+                ORDER BY mh.ChuyenNganh
+                """,
+                (ma_khoa,),
+            )
+            chuyen_nganh = [(x[0] or "").strip() for x in cursor.fetchall() if x and x[0]]
+            data.append(
+                {
+                    "ma_khoa": ma_khoa,
+                    "ten_khoa": r[1],
+                    "ghi_chu": r[2],
+                    "chuyen_nganh": chuyen_nganh,
+                }
+            )
+        return {"khoa": data}
+    finally:
+        cursor.close()
+        conn.close()
+
+
 @auth_router.post("/register")
 async def register(req: RegisterRequest):
-    username = normalize_username(req.username)
+    username_in = (req.username or "").strip()
     role = req.role.strip().upper()
     if not role_allowed(role) or role == "ADMIN":
         # ADMIN vẫn cho phép tạo qua admin seed, không qua register thường
         raise HTTPException(status_code=400, detail="Role không hợp lệ")
-
-    req.email = normalize_email(req.email)
-    if not EMAIL_REGEX.match(req.email or ""):
-        raise HTTPException(status_code=400, detail="Email không hợp lệ")
 
     ho_ten = (req.ho_ten or "").strip()
     if not ho_ten:
@@ -584,91 +838,150 @@ async def register(req: RegisterRequest):
 
     ma_sv = (req.ma_sv or "").strip() or None
     ma_gv = (req.ma_gv or "").strip() or None
+    ma_khoa_in = (req.ma_khoa or "").strip() or None
+    chuyen_nganh_in = (req.chuyen_nganh or "").strip() or None
+    ma_khoa_user: Optional[str] = None
 
-    if role == "STUDENT":
-        if not ma_sv:
-            raise HTTPException(status_code=400, detail="Thiếu mã sinh viên (ma_sv)")
-        if not student_exists(ma_sv):
-            raise HTTPException(status_code=400, detail="Mã sinh viên không tồn tại trong SinhVien")
-        # đồng bộ họ tên theo DB nếu khác
-        db_name = get_student_name(ma_sv)
-        if db_name:
-            ho_ten = db_name
+    if role == "TEACHER" and not username_in:
+        raise HTTPException(status_code=400, detail="Thiếu username")
 
-    if role == "TEACHER":
-        if not ma_gv:
-            raise HTTPException(status_code=400, detail="Thiếu mã giảng viên (ma_gv)")
-        # Không cho hai tài khoản TEACHER dùng chung MaGV
-        conn_chk = get_connection()
-        cur_chk = conn_chk.cursor()
-        try:
-            cur_chk.execute(
-                "SELECT COUNT(*) FROM dbo.NguoiDung WHERE Role = N'TEACHER' AND LTRIM(RTRIM(ISNULL(MaGV,''))) = LTRIM(RTRIM(?))",
-                (ma_gv,),
-            )
-            if cur_chk.fetchone()[0] > 0:
-                raise HTTPException(status_code=400, detail="Mã giảng viên đã được dùng để đăng ký tài khoản khác")
-        finally:
-            cur_chk.close()
-            conn_chk.close()
-        ensure_teacher_profile_for_registration(ma_gv, ho_ten, req.email, req.phone)
-
-    if len(req.password) < 6:
+    if role == "TEACHER" and (not req.password or len(req.password) < 6):
         raise HTTPException(status_code=400, detail="Password phải >= 6 ký tự")
 
-    salt = gen_salt_hex()
-    pwd_hash = hash_password(req.password, salt)
+    if role == "STUDENT":
+        # Username chuẩn theo "Họ đầu + Tên" (VD: Hoàng Ánh), có hậu tố số nếu trùng.
+        # Mật khẩu mặc định: TenKhongDau123@ (VD: Ánh -> Anh123@).
+        username_base = _build_student_username_base(ho_ten)
+        password_plain = _build_student_password(ho_ten)
+    else:
+        username_base = normalize_username(username_in)
+        password_plain = req.password or ""
 
+    raw_email = (req.email or "").strip()
     conn = get_connection()
     cursor = conn.cursor()
     try:
+        if role == "STUDENT":
+            username = _next_student_username(cursor, username_base)
+            if not ma_sv:
+                ma_sv = _next_ma_sv_auto(cursor)
+            cursor.execute("SELECT HoTen FROM dbo.SinhVien WHERE MaSV = ?", (ma_sv,))
+            row_sv = cursor.fetchone()
+            if row_sv:
+                if row_sv[0]:
+                    ho_ten = (row_sv[0] or "").strip() or ho_ten
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO dbo.SinhVien (MaSV, HoTen, NgaySinh, GioiTinh, Lop, Khoa, Email, TrangThai)
+                    VALUES (?, ?, NULL, NULL, NULL, NULL, NULL, N'Đang học')
+                    """,
+                    (ma_sv, ho_ten),
+                )
+        else:
+            username = username_base
+
+        if raw_email:
+            final_email = normalize_email(raw_email)
+            if not EMAIL_REGEX.match(final_email):
+                raise HTTPException(status_code=400, detail="Email không hợp lệ")
+        else:
+            final_email = synthetic_email_for_username(username)
+
+        gv_email = (
+            None
+            if final_email.endswith("@local.smartattendance")
+            else final_email
+        )
+
+        if role == "TEACHER":
+            if ma_khoa_in and chuyen_nganh_in:
+                cursor.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM dbo.MonHoc
+                    WHERE LTRIM(RTRIM(ISNULL(MaKhoa,''))) = LTRIM(RTRIM(?))
+                      AND LTRIM(RTRIM(ISNULL(ChuyenNganh,''))) = LTRIM(RTRIM(?))
+                    """,
+                    (ma_khoa_in, chuyen_nganh_in),
+                )
+                if cursor.fetchone()[0] == 0:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Chuyên ngành không thuộc khoa đã chọn trong CSDL",
+                    )
+            if ma_khoa_in:
+                ma_gv = ensure_teacher_register_with_khoa(ma_khoa_in, ho_ten, gv_email, req.phone)
+                ma_khoa_user = ma_khoa_in
+            elif ma_gv:
+                conn_chk = get_connection()
+                cur_chk = conn_chk.cursor()
+                try:
+                    cur_chk.execute(
+                        "SELECT COUNT(*) FROM dbo.NguoiDung WHERE Role = N'TEACHER' AND LTRIM(RTRIM(ISNULL(MaGV,''))) = LTRIM(RTRIM(?))",
+                        (ma_gv,),
+                    )
+                    if cur_chk.fetchone()[0] > 0:
+                        raise HTTPException(status_code=400, detail="Mã giảng viên đã được dùng để đăng ký tài khoản khác")
+                finally:
+                    cur_chk.close()
+                    conn_chk.close()
+                ensure_teacher_profile_for_registration(ma_gv, ho_ten, gv_email, req.phone)
+                conn_gv = get_connection()
+                cur_gv = conn_gv.cursor()
+                try:
+                    cur_gv.execute(
+                        "SELECT MaKhoa FROM dbo.GiangVien WHERE LTRIM(RTRIM(MaGV)) = LTRIM(RTRIM(?))",
+                        (ma_gv,),
+                    )
+                    rmk = cur_gv.fetchone()
+                    if rmk and rmk[0]:
+                        ma_khoa_user = (rmk[0] or "").strip() or None
+                finally:
+                    cur_gv.close()
+                    conn_gv.close()
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Chọn khoa giảng dạy (ma_khoa) hoặc nhập mã giảng viên có sẵn (ma_gv)",
+                )
+
+        if role == "STUDENT":
+            cursor.execute(
+                "SELECT COUNT(*) FROM dbo.NguoiDung WHERE Role = N'STUDENT' AND LTRIM(RTRIM(ISNULL(MaSV,''))) = LTRIM(RTRIM(?))",
+                (ma_sv,),
+            )
+            if cursor.fetchone()[0] > 0:
+                raise HTTPException(status_code=400, detail="Mã sinh viên đã có tài khoản đăng nhập")
+
         # Check username/email tồn tại
         cursor.execute("SELECT COUNT(*) FROM dbo.NguoiDung WHERE Username = ?", (username,))
         if cursor.fetchone()[0] > 0:
             raise HTTPException(status_code=400, detail="Username đã tồn tại")
 
-        cursor.execute("SELECT COUNT(*) FROM dbo.NguoiDung WHERE Email = ?", (req.email,))
+        cursor.execute("SELECT COUNT(*) FROM dbo.NguoiDung WHERE Email = ?", (final_email,))
         if cursor.fetchone()[0] > 0:
             raise HTTPException(status_code=400, detail="Email đã tồn tại")
 
-        cursor.execute(
-            """
-            INSERT INTO dbo.NguoiDung (Username, HoTen, MaSV, MaGV, Role, Email, Phone, PasswordHash, PasswordSalt, IsVerified, IsLocked, LockReason, Avatar, UpdatedAt)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, NULL, NULL, SYSUTCDATETIME())
-            """,
-            (username, ho_ten, ma_sv, ma_gv, role, req.email, req.phone, pwd_hash, salt),
-        )
-        conn.commit()
-
-        # lấy user id vừa tạo
-        cursor.execute("SELECT Id FROM dbo.NguoiDung WHERE Username = ?", (username,))
-        user_id = cursor.fetchone()[0]
-
-        otp_code = generate_otp_code()
-        otp_salt = gen_salt_hex(8)
-        otp_hash = sha256_hex(f"{otp_salt}:{otp_code}")
-        expires_at = datetime.now(timezone.utc) + timedelta(seconds=OTP_TTL_SECONDS)
+        salt = gen_salt_hex()
+        pwd_hash = hash_password(password_plain, salt)
 
         cursor.execute(
             """
-            INSERT INTO dbo.XacThucOtp (UserId, Email, Purpose, OtpSalt, OtpHash, ExpiresAt)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO dbo.NguoiDung (Username, HoTen, MaSV, MaGV, MaKhoa, Role, Email, Phone, PasswordHash, PasswordSalt, IsVerified, IsLocked, LockReason, Avatar, UpdatedAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, NULL, NULL, SYSUTCDATETIME())
             """,
-            (user_id, req.email, "register", otp_salt, otp_hash, expires_at),
+            (username, ho_ten, ma_sv, ma_gv, ma_khoa_user, role, final_email, req.phone, pwd_hash, salt),
         )
         conn.commit()
 
-        # gửi email OTP (nếu không có SMTP thì trả dev_otp để hiển thị trên màn hình)
-        try:
-            sent = send_email_otp(req.email, otp_code)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Không gửi được OTP email: {e}")
-
-        out = {"success": True, "message": "Đã gửi OTP tới email. Vui lòng xác thực để kích hoạt tài khoản."}
-        if not sent:
-            out["dev_otp"] = otp_code
-            out["message"] = "Chưa cấu hình gửi email. Dùng mã OTP bên dưới để xác thực (chế độ dev)."
-        return out
+        return {
+            "success": True,
+            "message": "Đăng ký thành công. Bạn có thể đăng nhập ngay bằng username và mật khẩu.",
+            "username": username,
+            "password": password_plain if role == "STUDENT" else None,
+            "ma_sv": ma_sv,
+        }
     except HTTPException:
         conn.rollback()
         raise
@@ -800,13 +1113,52 @@ async def login(req: LoginRequest):
 
     if is_locked:
         raise HTTPException(status_code=403, detail=f"Tài khoản đang bị khóa: {lock_reason or ''}".strip())
-    if not is_verified:
-        raise HTTPException(status_code=403, detail="Tài khoản chưa xác thực OTP")
     if not verify_password(password, pwd_salt, pwd_hash):
         raise HTTPException(status_code=401, detail="Sai tài khoản hoặc mật khẩu")
 
     token = create_jwt({"uid": user_id, "username": username, "role": role})
     return {"success": True, "token": token, "role": role, "username": username, "email": email}
+
+
+@auth_router.post("/change-password")
+async def change_password(req: ChangePasswordRequest, current=Depends(get_current_user)):
+    """Đổi mật khẩu khi đã đăng nhập (không dùng email/OTP)."""
+    if current.get("is_locked"):
+        raise HTTPException(status_code=403, detail="Tài khoản đang bị khóa")
+    if len((req.new_password or "").strip()) < 6:
+        raise HTTPException(status_code=400, detail="Mật khẩu mới phải >= 6 ký tự")
+
+    row = get_user_row_by_username(current["username"])
+    if not row:
+        raise HTTPException(status_code=401, detail="Tài khoản không tồn tại")
+
+    user_id = row[0]
+    pwd_hash = (row[5] or "").strip()
+    pwd_salt = (row[6] or "").strip()
+    old_pwd = (req.old_password or "").strip()
+
+    if not verify_password(old_pwd, pwd_salt, pwd_hash):
+        raise HTTPException(status_code=400, detail="Mật khẩu hiện tại không đúng")
+
+    new_salt = gen_salt_hex()
+    new_hash = hash_password(req.new_password.strip(), new_salt)
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            UPDATE dbo.NguoiDung
+            SET PasswordSalt = ?, PasswordHash = ?, UpdatedAt = SYSUTCDATETIME()
+            WHERE Id = ?
+            """,
+            (new_salt, new_hash, user_id),
+        )
+        conn.commit()
+        return {"success": True, "message": "Đã đổi mật khẩu thành công"}
+    finally:
+        cursor.close()
+        conn.close()
 
 
 @auth_router.post("/forgot-password")
@@ -995,6 +1347,8 @@ async def me(current=Depends(require_role("ADMIN", "TEACHER", "STUDENT"))):
                 ho_ten=current.get("ho_ten"),
                 ma_sv=current.get("ma_sv"),
                 ma_gv=current.get("ma_gv"),
+                ma_khoa=current.get("ma_khoa"),
+                ten_khoa=None,
                 role=current["role"],
                 email=current["email"],
                 phone=current["phone"],
@@ -1005,18 +1359,40 @@ async def me(current=Depends(require_role("ADMIN", "TEACHER", "STUDENT"))):
             )
 
         # TEACHER / ADMIN
+        ten_khoa = None
+        mk = (current.get("ma_khoa") or "").strip()
+        if mk:
+            conn_k = get_connection()
+            cur_k = conn_k.cursor()
+            try:
+                cur_k.execute("SELECT TenKhoa FROM dbo.Khoa WHERE MaKhoa = ?", (mk,))
+                rr = cur_k.fetchone()
+                if rr:
+                    ten_khoa = rr[0]
+            finally:
+                cur_k.close()
+                conn_k.close()
+        prof = {"note": "Profile teacher/admin được hỗ trợ ở phần RBAC sâu hơn."}
+        if current["role"] == "TEACHER":
+            prof = {
+                "ma_gv": current.get("ma_gv"),
+                "ma_khoa": mk or None,
+                "ten_khoa": ten_khoa,
+            }
         return MeResponse(
             username=current["username"],
             ho_ten=current.get("ho_ten"),
             ma_sv=current.get("ma_sv"),
             ma_gv=current.get("ma_gv"),
+            ma_khoa=mk or None,
+            ten_khoa=ten_khoa,
             role=current["role"],
             email=current["email"],
             phone=current["phone"],
             is_verified=current["is_verified"],
             is_locked=current["is_locked"],
             avatar=current["avatar"],
-            profile={"note": "Profile teacher/admin được hỗ trợ ở phần RBAC sâu hơn."},
+            profile=prof,
         )
     finally:
         cursor.close()
@@ -1042,6 +1418,115 @@ async def set_lock(
     finally:
         cursor.close()
         conn.close()
+
+
+@auth_router.patch("/teacher/profile")
+async def patch_teacher_profile(body: TeacherProfileUpdate, current=Depends(require_role("TEACHER"))):
+    """Cập nhật email / điện thoại giảng viên (NguoiDung + GiangVien)."""
+    ma_gv = (current.get("ma_gv") or "").strip()
+    uid = current["uid"]
+    email_in = (body.email or "").strip() if body.email is not None else None
+    phone_in = (body.phone or "").strip() if body.phone is not None else None
+
+    if email_in is not None:
+        if not email_in:
+            raise HTTPException(status_code=400, detail="Email không được để trống")
+        if not EMAIL_REGEX.match(email_in):
+            raise HTTPException(status_code=400, detail="Email không hợp lệ")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        if email_in is not None:
+            cursor.execute(
+                "SELECT COUNT(*) FROM dbo.NguoiDung WHERE Email = ? AND Id <> ?",
+                (email_in, uid),
+            )
+            if cursor.fetchone()[0] > 0:
+                raise HTTPException(status_code=400, detail="Email đã được dùng bởi tài khoản khác")
+
+        sets_nd = []
+        params_nd: List[Any] = []
+        if email_in is not None:
+            sets_nd.append("Email = ?")
+            params_nd.append(email_in)
+        if phone_in is not None:
+            sets_nd.append("Phone = ?")
+            params_nd.append(phone_in or None)
+        if sets_nd:
+            sets_nd.append("UpdatedAt = SYSUTCDATETIME()")
+            sql_nd = f"UPDATE dbo.NguoiDung SET {', '.join(sets_nd)} WHERE Id = ?"
+            params_nd.append(uid)
+            cursor.execute(sql_nd, tuple(params_nd))
+
+        if ma_gv and (email_in is not None or phone_in is not None):
+            sets_gv = []
+            params_gv: List[Any] = []
+            if email_in is not None:
+                sets_gv.append("Email = ?")
+                params_gv.append(email_in or None)
+            if phone_in is not None:
+                sets_gv.append("DienThoai = ?")
+                params_gv.append(phone_in or None)
+            if sets_gv:
+                sql_gv = f"UPDATE dbo.GiangVien SET {', '.join(sets_gv)} WHERE LTRIM(RTRIM(MaGV)) = LTRIM(RTRIM(?))"
+                params_gv.append(ma_gv)
+                cursor.execute(sql_gv, tuple(params_gv))
+
+        conn.commit()
+        return {"success": True, "message": "Đã cập nhật hồ sơ"}
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def _clear_teacher_auth_avatar(uid: int) -> None:
+    """Xóa Avatar trong DB + file trong avatars_auth (dùng cho DELETE và POST)."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT Avatar FROM dbo.NguoiDung WHERE Id = ?", (uid,))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Không tìm thấy tài khoản")
+        fn = (row[0] or "").strip() if row else ""
+        cursor.execute(
+            "UPDATE dbo.NguoiDung SET Avatar = NULL, UpdatedAt = SYSUTCDATETIME() WHERE Id = ?",
+            (uid,),
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=400, detail="Không cập nhật được ảnh đại diện")
+        conn.commit()
+        if fn:
+            path = os.path.join(AUTH_AVATARS_DIR, fn)
+            if os.path.isfile(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@auth_router.delete("/teacher/avatar")
+async def delete_teacher_avatar(current=Depends(require_role("TEACHER"))):
+    """Xóa ảnh đại diện tài khoản giảng viên."""
+    _clear_teacher_auth_avatar(current["uid"])
+    return {"success": True}
+
+
+@auth_router.post("/teacher/avatar/clear")
+async def post_clear_teacher_avatar(current=Depends(require_role("TEACHER"))):
+    """Giống DELETE /teacher/avatar — một số proxy/client gặp lỗi với DELETE hoặc mất Authorization khi redirect."""
+    _clear_teacher_auth_avatar(current["uid"])
+    return {"success": True}
 
 
 @auth_router.post("/teacher/avatar")
@@ -1096,7 +1581,7 @@ async def get_avatar(username: str, current=Depends(require_role("ADMIN", "TEACH
         if not os.path.isfile(path):
             raise HTTPException(status_code=404, detail="File ảnh không tồn tại")
 
-        return FileResponse(path, media_type="image/jpeg")
+        return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
     finally:
         cursor.close()
         conn.close()
@@ -1131,6 +1616,72 @@ async def admin_list_users(current=Depends(require_role("ADMIN"))):
                 }
             )
         return {"users": data}
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@auth_router.post("/admin/provision-student-accounts")
+async def admin_provision_student_accounts(current=Depends(require_role("ADMIN"))):
+    """
+    Tạo tài khoản đăng nhập cho toàn bộ SinhVien chưa có user STUDENT.
+    Quy tắc:
+    - username: "Họ đầu + Tên" (nếu trùng thì thêm hậu tố số)
+    - password mặc định: TenKhongDau123@
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    created: List[StudentCredentialItem] = []
+    try:
+        cursor.execute(
+            """
+            SELECT sv.MaSV, sv.HoTen
+            FROM dbo.SinhVien sv
+            LEFT JOIN dbo.NguoiDung u
+              ON u.Role = N'STUDENT'
+             AND LTRIM(RTRIM(ISNULL(u.MaSV, ''))) = LTRIM(RTRIM(ISNULL(sv.MaSV, '')))
+            WHERE u.Id IS NULL
+            ORDER BY sv.MaSV
+            """
+        )
+        rows = cursor.fetchall()
+        for row in rows:
+            ma_sv = (row[0] or "").strip()
+            ho_ten = (row[1] or "").strip() or f"Sinh viên {ma_sv}"
+            username = _next_student_username(cursor, _build_student_username_base(ho_ten))
+            plain_password = _build_student_password(ho_ten)
+            email = synthetic_email_for_username(username)
+            salt = gen_salt_hex()
+            pwd_hash = hash_password(plain_password, salt)
+            cursor.execute(
+                """
+                INSERT INTO dbo.NguoiDung
+                  (Username, HoTen, MaSV, MaGV, MaKhoa, Role, Email, Phone, PasswordHash, PasswordSalt, IsVerified, IsLocked, LockReason, Avatar, UpdatedAt)
+                VALUES (?, ?, ?, NULL, NULL, N'STUDENT', ?, NULL, ?, ?, 1, 0, NULL, NULL, SYSUTCDATETIME())
+                """,
+                (username, ho_ten, ma_sv, email, pwd_hash, salt),
+            )
+            created.append(
+                StudentCredentialItem(
+                    ma_sv=ma_sv,
+                    ho_ten=ho_ten,
+                    username=username,
+                    password=plain_password,
+                )
+            )
+
+        conn.commit()
+        return {
+            "success": True,
+            "created_count": len(created),
+            "created": [item.model_dump() for item in created],
+        }
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Không thể tạo tài khoản sinh viên: {e}") from e
     finally:
         cursor.close()
         conn.close()

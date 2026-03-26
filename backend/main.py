@@ -21,8 +21,15 @@ import pyodbc
 from training_module import training_manager
 
 from auth_routes import auth_router as _auth_router, require_role
+from teacher_routes import teacher_router as _teacher_router, ensure_buoi_hoc_extra_columns
+from database.cntt_schema import run_cntt_schema_and_seed
 
 app = FastAPI(title="Smart Attendance AI API")
+
+# Cột buổi học: mã xác thực + thời gian điểm danh
+ensure_buoi_hoc_extra_columns()
+# Khoa, môn/lớp CNTT (seed tùy chọn), view vw_LopHocPhan_ChiTiet
+run_cntt_schema_and_seed()
 
 # CORS
 app.add_middleware(
@@ -41,6 +48,7 @@ print("=" * 60)
 
 # ==================== AUTH ====================
 app.include_router(_auth_router, prefix="/api/auth")
+app.include_router(_teacher_router, prefix="/api/teacher")
 
 # YOLO
 try:
@@ -97,6 +105,17 @@ class StudentFeedbackCreate(BaseModel):
     tieu_de: Optional[str] = None
     noi_dung: str
     ma_lhp: Optional[str] = None
+
+
+class TeacherAssignPayload(BaseModel):
+    ma_gv: Optional[str] = None
+
+
+class AdminCreateClassPayload(BaseModel):
+    ma_mon: str
+    nam_hoc: Optional[str] = None
+    hoc_ky: Optional[int] = 1
+    phong_hoc: Optional[str] = None
 
 
 AVATARS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "avatars")
@@ -330,6 +349,613 @@ async def create_student(student: StudentInfo):
         return {"success": True, "message": "Thêm sinh viên thành công"}
     except pyodbc.IntegrityError:
         raise HTTPException(status_code=400, detail="Mã sinh viên đã tồn tại")
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.get("/api/admin/teaching/teachers")
+async def admin_list_teachers(current=Depends(require_role("ADMIN"))):
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT
+                gv.MaGV,
+                gv.HoTen,
+                gv.MaKhoa,
+                COUNT(DISTINCT lhp.MaLHP) AS SoLopHocPhan
+            FROM dbo.GiangVien gv
+            INNER JOIN dbo.NguoiDung nd
+              ON nd.Role = N'TEACHER'
+             AND LTRIM(RTRIM(ISNULL(nd.MaGV,''))) = LTRIM(RTRIM(ISNULL(gv.MaGV,'')))
+            LEFT JOIN dbo.LopHocPhan lhp
+              ON LTRIM(RTRIM(ISNULL(lhp.MaGV,''))) = LTRIM(RTRIM(ISNULL(gv.MaGV,'')))
+            GROUP BY gv.MaGV, gv.HoTen, gv.MaKhoa
+            ORDER BY gv.HoTen
+            """
+        )
+        data = []
+        for r in cursor.fetchall():
+            data.append(
+                {
+                    "ma_gv": r[0],
+                    "ho_ten": r[1],
+                    "ma_khoa": r[2],
+                    "so_lop_hoc_phan": int(r[3] or 0),
+                }
+            )
+        return {"teachers": data}
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.get("/api/admin/teaching/classes")
+async def admin_list_classes(current=Depends(require_role("ADMIN"))):
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT
+                v.MaLHP,
+                v.MaMon,
+                v.TenMon,
+                v.MaGV,
+                COALESCE(v.TenGiangVien, v.GiangVienText) AS TenGiangVien,
+                v.MaKhoa,
+                (
+                  SELECT COUNT(*) FROM dbo.BuoiHoc bh
+                  WHERE bh.MaLHP = v.MaLHP
+                ) AS SoBuoi,
+                (
+                  SELECT COUNT(*) FROM dbo.DiemDanh dd
+                  JOIN dbo.BuoiHoc bh2 ON dd.MaBuoi = bh2.MaBuoi
+                  WHERE bh2.MaLHP = v.MaLHP
+                ) AS SoLanDiemDanh
+            FROM dbo.vw_LopHocPhan_ChiTiet v
+            WHERE ISNULL(LTRIM(RTRIM(v.MaGV)), '') = ''
+            ORDER BY v.MaLHP
+            """
+        )
+        rows = cursor.fetchall()
+        data = []
+        for r in rows:
+            data.append(
+                {
+                    "ma_lhp": r[0],
+                    "ma_mon": r[1],
+                    "ten_mon": r[2],
+                    "ma_gv": r[3],
+                    "ten_giang_vien": r[4],
+                    "ma_khoa": r[5],
+                    "so_buoi": int(r[6] or 0),
+                    "so_lan_diem_danh": int(r[7] or 0),
+                }
+            )
+        return {"classes": data}
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.get("/api/admin/teaching/courses")
+async def admin_list_courses_for_class_create(current=Depends(require_role("ADMIN"))):
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT mh.MaMon, mh.TenMon, mh.MaKhoa, mh.ChuyenNganh, k.TenKhoa
+            FROM dbo.MonHoc mh
+            LEFT JOIN dbo.Khoa k ON k.MaKhoa = mh.MaKhoa
+            ORDER BY mh.MaKhoa, mh.MaMon
+            """
+        )
+        data = []
+        for r in cursor.fetchall():
+            data.append(
+                {
+                    "ma_mon": r[0],
+                    "ten_mon": r[1],
+                    "ma_khoa": r[2],
+                    "chuyen_nganh": r[3],
+                    "ten_khoa": r[4],
+                }
+            )
+        return {"courses": data}
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def _next_lhp_code(cursor, year_token: str) -> str:
+    cursor.execute("SELECT MaLHP FROM dbo.LopHocPhan WHERE MaLHP LIKE ?", (f"LHP%HK{year_token}",))
+    max_num = 0
+    for row in cursor.fetchall():
+        ma = str(row[0] or "")
+        m = ma.replace(" ", "")
+        if not m.startswith("LHP") or f"HK{year_token}" not in m:
+            continue
+        try:
+            n = int(m[3:].split("HK")[0])
+            if n > max_num:
+                max_num = n
+        except Exception:
+            continue
+    return f"LHP{max_num + 1:03d}HK{year_token}"
+
+
+@app.post("/api/admin/teaching/classes")
+async def admin_create_class(payload: AdminCreateClassPayload, current=Depends(require_role("ADMIN"))):
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            IF COL_LENGTH('dbo.LopHocPhan', 'PhongHoc') IS NULL
+                ALTER TABLE dbo.LopHocPhan ADD PhongHoc NVARCHAR(50) NULL
+            """
+        )
+        cursor.execute(
+            """
+            IF COL_LENGTH('dbo.LopHocPhan', 'CreatedAt') IS NULL
+                ALTER TABLE dbo.LopHocPhan ADD CreatedAt DATETIME2 NULL
+            """
+        )
+
+        ma_mon = (payload.ma_mon or "").strip()
+        if not ma_mon:
+            raise HTTPException(status_code=400, detail="Thiếu mã môn")
+
+        cursor.execute(
+            "SELECT TenMon, MaKhoa FROM dbo.MonHoc WHERE LTRIM(RTRIM(MaMon)) = LTRIM(RTRIM(?))",
+            (ma_mon,),
+        )
+        mon = cursor.fetchone()
+        if not mon:
+            raise HTTPException(status_code=404, detail="Môn học không tồn tại")
+
+        nam_hoc = (payload.nam_hoc or "").strip() or "2025-2026"
+        hoc_ky = int(payload.hoc_ky or 1)
+        phong_hoc = (payload.phong_hoc or "").strip() or "P301"
+
+        try:
+            y1, y2 = nam_hoc.split("-")
+            year_token = f"{str(y1)[-2:]}{str(y2)[-2:]}"
+        except Exception:
+            year_token = "2526"
+
+        ma_lhp = _next_lhp_code(cursor, year_token)
+
+        cursor.execute(
+            """
+            SELECT COLUMN_NAME
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA='dbo' AND TABLE_NAME='LopHocPhan'
+            """
+        )
+        lhp_cols = {r[0] for r in cursor.fetchall()}
+        row_data = {
+            "MaLHP": ma_lhp,
+            "MaMon": ma_mon,
+            "GiangVien": "Chưa phân công",
+            "MaGV": None,
+            "MaKhoa": mon[1],
+            "NamHoc": nam_hoc,
+            "HocKy": hoc_ky,
+            "PhongHoc": phong_hoc,
+            "CreatedAt": datetime.utcnow(),
+        }
+        use_cols = [c for c in row_data.keys() if c in lhp_cols]
+        placeholders = ", ".join(["?"] * len(use_cols))
+        sql = f"INSERT INTO dbo.LopHocPhan ({', '.join(use_cols)}) VALUES ({placeholders})"
+        cursor.execute(sql, tuple(row_data[c] for c in use_cols))
+        conn.commit()
+        return {
+            "success": True,
+            "message": "Đã tạo lớp học phần",
+            "ma_lhp": ma_lhp,
+            "ma_mon": ma_mon,
+        }
+    except HTTPException:
+        conn.rollback()
+        raise
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.get("/api/admin/dashboard-overview")
+async def admin_dashboard_overview(current=Depends(require_role("ADMIN"))):
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            IF COL_LENGTH('dbo.LopHocPhan', 'CreatedAt') IS NULL
+                ALTER TABLE dbo.LopHocPhan ADD CreatedAt DATETIME2 NULL
+            """
+        )
+        cursor.execute(
+            """
+            UPDATE dbo.LopHocPhan
+            SET CreatedAt = COALESCE(CreatedAt, SYSUTCDATETIME())
+            WHERE CreatedAt IS NULL
+            """
+        )
+
+        cursor.execute("SELECT COUNT(*) FROM dbo.LopHocPhan")
+        total_hoc_phan = int(cursor.fetchone()[0] or 0)
+
+        cursor.execute(
+            """
+            SELECT COUNT(*) FROM dbo.LopHocPhan
+            WHERE CAST(CreatedAt AS DATE) = CAST(GETDATE() AS DATE)
+            """
+        )
+        created_today = int(cursor.fetchone()[0] or 0)
+
+        cursor.execute(
+            """
+            SELECT COUNT(*) FROM dbo.LopHocPhan
+            WHERE CreatedAt >= DATEADD(day, -7, SYSUTCDATETIME())
+            """
+        )
+        created_week = int(cursor.fetchone()[0] or 0)
+
+        cursor.execute(
+            """
+            SELECT COUNT(*) FROM dbo.LopHocPhan
+            WHERE CreatedAt >= DATEADD(day, -30, SYSUTCDATETIME())
+            """
+        )
+        created_month = int(cursor.fetchone()[0] or 0)
+
+        cursor.execute(
+            """
+            SELECT COUNT(*) FROM dbo.LopHocPhan
+            WHERE ISNULL(LTRIM(RTRIM(MaGV)), '') <> ''
+            """
+        )
+        assigned_count = int(cursor.fetchone()[0] or 0)
+        unassigned_count = max(total_hoc_phan - assigned_count, 0)
+
+        cursor.execute(
+            """
+            SELECT
+                lhp.MaLHP,
+                mh.TenMon,
+                lhp.MaGV,
+                COALESCE(gv.HoTen, lhp.GiangVien) AS TenGiangVien,
+                COUNT(DISTINCT bh.MaBuoi) AS SoBuoi,
+                COUNT(dd.MaDiemDanh) AS LuotDiemDanh,
+                SUM(CASE WHEN dd.TrangThai IN (N'Đúng giờ', N'Có mặt') THEN 1 ELSE 0 END) AS LuotDungGio
+            FROM dbo.LopHocPhan lhp
+            LEFT JOIN dbo.MonHoc mh ON lhp.MaMon = mh.MaMon
+            LEFT JOIN dbo.GiangVien gv ON LTRIM(RTRIM(ISNULL(gv.MaGV,''))) = LTRIM(RTRIM(ISNULL(lhp.MaGV,'')))
+            LEFT JOIN dbo.BuoiHoc bh ON bh.MaLHP = lhp.MaLHP
+            LEFT JOIN dbo.DiemDanh dd ON dd.MaBuoi = bh.MaBuoi
+            WHERE ISNULL(LTRIM(RTRIM(lhp.MaGV)), '') <> ''
+            GROUP BY lhp.MaLHP, mh.TenMon, lhp.MaGV, COALESCE(gv.HoTen, lhp.GiangVien)
+            ORDER BY LuotDiemDanh DESC, SoBuoi DESC, lhp.MaLHP
+            """
+        )
+        attendance_by_class = []
+        for r in cursor.fetchall():
+            luot_dd = int(r[5] or 0)
+            luot_dung_gio = int(r[6] or 0)
+            attendance_by_class.append(
+                {
+                    "ma_lhp": r[0],
+                    "ten_mon": r[1],
+                    "ma_gv": r[2],
+                    "ten_giang_vien": r[3],
+                    "so_buoi": int(r[4] or 0),
+                    "luot_diem_danh": luot_dd,
+                    "ty_le_dung_gio": float((luot_dung_gio * 100.0 / luot_dd) if luot_dd > 0 else 0),
+                }
+            )
+
+        cursor.execute(
+            """
+            SELECT
+                lhp.MaGV,
+                COALESCE(gv.HoTen, lhp.GiangVien) AS TenGiangVien,
+                COUNT(*) AS SoHocPhanPhanCong
+            FROM dbo.LopHocPhan lhp
+            LEFT JOIN dbo.GiangVien gv ON LTRIM(RTRIM(ISNULL(gv.MaGV,''))) = LTRIM(RTRIM(ISNULL(lhp.MaGV,'')))
+            WHERE ISNULL(LTRIM(RTRIM(lhp.MaGV)), '') <> ''
+            GROUP BY lhp.MaGV, COALESCE(gv.HoTen, lhp.GiangVien)
+            ORDER BY SoHocPhanPhanCong DESC, TenGiangVien
+            """
+        )
+        teacher_load = [
+            {
+                "ma_gv": r[0],
+                "ten_giang_vien": r[1],
+                "so_hoc_phan": int(r[2] or 0),
+            }
+            for r in cursor.fetchall()
+        ]
+
+        cursor.execute(
+            """
+            SELECT COUNT(*) FROM dbo.BuoiHoc
+            WHERE CAST(NgayHoc AS DATE) = CAST(GETDATE() AS DATE)
+            """
+        )
+        sessions_today = int(cursor.fetchone()[0] or 0)
+
+        alerts = []
+        if unassigned_count > 0:
+            alerts.append(f"Còn {unassigned_count} học phần chưa phân công giảng viên.")
+        if sessions_today == 0:
+            alerts.append("Hôm nay chưa có buổi học nào được tạo.")
+        if not alerts:
+            alerts.append("Dữ liệu tổng quan ổn định. Không có cảnh báo quan trọng.")
+
+        return {
+            "stats": {
+                "total_hoc_phan": total_hoc_phan,
+                "created_today": created_today,
+                "created_week": created_week,
+                "created_month": created_month,
+                "assigned_count": assigned_count,
+                "unassigned_count": unassigned_count,
+            },
+            "attendance_by_class": attendance_by_class,
+            "teacher_load": teacher_load,
+            "alerts": alerts,
+        }
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.get("/api/admin/teaching/class-detail/{ma_lhp}")
+async def admin_teaching_class_detail(ma_lhp: str, current=Depends(require_role("ADMIN"))):
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM dbo.LopHocPhan
+            WHERE LTRIM(RTRIM(MaLHP)) = LTRIM(RTRIM(?))
+            """,
+            (ma_lhp,),
+        )
+        if cursor.fetchone()[0] == 0:
+            raise HTTPException(status_code=404, detail="Học phần không tồn tại")
+
+        cursor.execute(
+            """
+            SELECT
+                COUNT(DISTINCT bh.MaBuoi) AS TongBuoi,
+                COUNT(dd.MaDiemDanh) AS TongLuot,
+                SUM(CASE WHEN dd.TrangThai IN (N'Đúng giờ', N'Có mặt') THEN 1 ELSE 0 END) AS DungGio,
+                SUM(CASE WHEN dd.TrangThai = N'Trễ' THEN 1 ELSE 0 END) AS Tre
+            FROM dbo.BuoiHoc bh
+            LEFT JOIN dbo.DiemDanh dd ON dd.MaBuoi = bh.MaBuoi
+            WHERE LTRIM(RTRIM(bh.MaLHP)) = LTRIM(RTRIM(?))
+            """,
+            (ma_lhp,),
+        )
+        s = cursor.fetchone()
+        summary = {
+            "total_sessions": int(s[0] or 0),
+            "total_attendance": int(s[1] or 0),
+            "on_time_count": int(s[2] or 0),
+            "late_count": int(s[3] or 0),
+        }
+
+        cursor.execute(
+            """
+            SELECT
+                bh.MaBuoi,
+                bh.NgayHoc,
+                bh.GioBatDau,
+                COUNT(dd.MaDiemDanh) AS LuotDiemDanh,
+                SUM(CASE WHEN dd.TrangThai IN (N'Đúng giờ', N'Có mặt') THEN 1 ELSE 0 END) AS DungGio,
+                SUM(CASE WHEN dd.TrangThai = N'Trễ' THEN 1 ELSE 0 END) AS Tre
+            FROM dbo.BuoiHoc bh
+            LEFT JOIN dbo.DiemDanh dd ON dd.MaBuoi = bh.MaBuoi
+            WHERE LTRIM(RTRIM(bh.MaLHP)) = LTRIM(RTRIM(?))
+            GROUP BY bh.MaBuoi, bh.NgayHoc, bh.GioBatDau
+            ORDER BY bh.NgayHoc DESC, bh.GioBatDau DESC, bh.MaBuoi DESC
+            """,
+            (ma_lhp,),
+        )
+        sessions = []
+        for r in cursor.fetchall():
+            sessions.append(
+                {
+                    "ma_buoi": int(r[0]),
+                    "ngay_hoc": r[1].isoformat() if r[1] else None,
+                    "gio_bat_dau": str(r[2]) if r[2] else None,
+                    "attendance_count": int(r[3] or 0),
+                    "on_time_count": int(r[4] or 0),
+                    "late_count": int(r[5] or 0),
+                }
+            )
+
+        cursor.execute(
+            """
+            SELECT
+                sv.MaSV,
+                sv.HoTen,
+                COUNT(dd.MaDiemDanh) AS TongLuot,
+                SUM(CASE WHEN dd.TrangThai IN (N'Đúng giờ', N'Có mặt') THEN 1 ELSE 0 END) AS DungGio,
+                SUM(CASE WHEN dd.TrangThai = N'Trễ' THEN 1 ELSE 0 END) AS Tre,
+                MAX(dd.ThoiGianQuet) AS LanCuoi
+            FROM dbo.BuoiHoc bh
+            JOIN dbo.DiemDanh dd ON dd.MaBuoi = bh.MaBuoi
+            JOIN dbo.SinhVien sv ON sv.MaSV = dd.MaSV
+            WHERE LTRIM(RTRIM(bh.MaLHP)) = LTRIM(RTRIM(?))
+            GROUP BY sv.MaSV, sv.HoTen
+            ORDER BY TongLuot DESC, sv.MaSV
+            """,
+            (ma_lhp,),
+        )
+        students = []
+        for r in cursor.fetchall():
+            students.append(
+                {
+                    "ma_sv": r[0],
+                    "ho_ten": r[1],
+                    "total_checkins": int(r[2] or 0),
+                    "on_time_count": int(r[3] or 0),
+                    "late_count": int(r[4] or 0),
+                    "last_checkin": r[5].isoformat() if r[5] else None,
+                }
+            )
+
+        return {
+            "ma_lhp": ma_lhp,
+            "summary": summary,
+            "sessions": sessions,
+            "students": students,
+        }
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.patch("/api/admin/teaching/classes/{ma_lhp}/teacher")
+async def admin_assign_teacher_for_class(
+    ma_lhp: str,
+    payload: TeacherAssignPayload,
+    current=Depends(require_role("ADMIN")),
+):
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT COUNT(*) FROM dbo.LopHocPhan WHERE LTRIM(RTRIM(MaLHP)) = LTRIM(RTRIM(?))", (ma_lhp,))
+        if cursor.fetchone()[0] == 0:
+            raise HTTPException(status_code=404, detail="Lớp học phần không tồn tại")
+
+        ma_gv = (payload.ma_gv or "").strip() or None
+        ten_gv = None
+        if ma_gv:
+            cursor.execute(
+                """
+                SELECT gv.HoTen
+                FROM dbo.GiangVien gv
+                INNER JOIN dbo.NguoiDung nd
+                  ON nd.Role = N'TEACHER'
+                 AND LTRIM(RTRIM(ISNULL(nd.MaGV,''))) = LTRIM(RTRIM(ISNULL(gv.MaGV,'')))
+                WHERE LTRIM(RTRIM(gv.MaGV)) = LTRIM(RTRIM(?))
+                """,
+                (ma_gv,),
+            )
+            row_gv = cursor.fetchone()
+            if not row_gv:
+                raise HTTPException(status_code=400, detail="Mã giảng viên không hợp lệ hoặc chưa có tài khoản đăng ký")
+            ten_gv = row_gv[0]
+
+        cursor.execute(
+            """
+            UPDATE dbo.LopHocPhan
+            SET MaGV = ?, GiangVien = ?
+            WHERE LTRIM(RTRIM(MaLHP)) = LTRIM(RTRIM(?))
+            """,
+            (ma_gv, ten_gv, ma_lhp),
+        )
+        conn.commit()
+        return {
+            "success": True,
+            "message": "Đã cập nhật phân công giảng viên",
+            "ma_lhp": ma_lhp,
+            "ma_gv": ma_gv,
+            "ten_giang_vien": ten_gv,
+        }
+    except HTTPException:
+        conn.rollback()
+        raise
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.get("/api/admin/teaching/overview")
+async def admin_teaching_overview(
+    ma_gv: Optional[str] = None,
+    ma_lhp: Optional[str] = None,
+    from_date: Optional[date] = None,
+    to_date: Optional[date] = None,
+    current=Depends(require_role("ADMIN")),
+):
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        filters = []
+        params: List = []
+        if ma_gv and ma_gv.strip():
+            filters.append("LTRIM(RTRIM(ISNULL(lhp.MaGV,''))) = LTRIM(RTRIM(?))")
+            params.append(ma_gv.strip())
+        if ma_lhp and ma_lhp.strip():
+            filters.append("LTRIM(RTRIM(bh.MaLHP)) = LTRIM(RTRIM(?))")
+            params.append(ma_lhp.strip())
+        if from_date:
+            filters.append("CAST(bh.NgayHoc AS DATE) >= ?")
+            params.append(from_date)
+        if to_date:
+            filters.append("CAST(bh.NgayHoc AS DATE) <= ?")
+            params.append(to_date)
+        where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+
+        cursor.execute(
+            f"""
+            SELECT
+                bh.MaBuoi,
+                bh.MaLHP,
+                mh.MaMon,
+                mh.TenMon,
+                bh.NgayHoc,
+                bh.GioBatDau,
+                bh.MaXacThucBuoi,
+                lhp.MaGV,
+                COALESCE(gv.HoTen, lhp.GiangVien) AS TenGiangVien,
+                dd.MaSV,
+                sv.HoTen AS TenSinhVien,
+                dd.TrangThai,
+                dd.ThoiGianQuet
+            FROM dbo.BuoiHoc bh
+            JOIN dbo.LopHocPhan lhp ON bh.MaLHP = lhp.MaLHP
+            LEFT JOIN dbo.MonHoc mh ON lhp.MaMon = mh.MaMon
+            LEFT JOIN dbo.GiangVien gv
+              ON LTRIM(RTRIM(ISNULL(lhp.MaGV,''))) = LTRIM(RTRIM(ISNULL(gv.MaGV,'')))
+            LEFT JOIN dbo.DiemDanh dd ON dd.MaBuoi = bh.MaBuoi
+            LEFT JOIN dbo.SinhVien sv ON sv.MaSV = dd.MaSV
+            {where_clause}
+            ORDER BY bh.NgayHoc DESC, bh.GioBatDau DESC, bh.MaBuoi DESC, dd.ThoiGianQuet DESC
+            """,
+            params,
+        )
+        rows = cursor.fetchall()
+        data = []
+        for r in rows:
+            data.append(
+                {
+                    "ma_buoi": int(r[0]),
+                    "ma_lhp": r[1],
+                    "ma_mon": r[2],
+                    "ten_mon": r[3],
+                    "ngay_hoc": r[4].isoformat() if r[4] else None,
+                    "gio_bat_dau": str(r[5]) if r[5] else None,
+                    "ma_xac_thuc_buoi": r[6],
+                    "ma_gv": r[7],
+                    "ten_giang_vien": r[8],
+                    "ma_sv": r[9],
+                    "ten_sinh_vien": r[10],
+                    "trang_thai": r[11],
+                    "thoi_gian_quet": r[12].isoformat() if r[12] else None,
+                }
+            )
+        return {"rows": data}
     finally:
         cursor.close()
         conn.close()
@@ -914,59 +1540,106 @@ async def get_sessions_by_date(date: str = None):
 # ==================== ATTENDANCE APIs ====================
 
 @app.post("/api/attendance/checkin")
-async def checkin_attendance(ma_sv: str, ma_buoi: int):
+async def checkin_attendance(
+    ma_sv: str,
+    ma_buoi: int,
+    ma_xac_thuc: Optional[str] = None,
+):
+    """
+    Điểm danh: sinh viên phải thuộc LHP của buổi; nếu buổi có MaXacThucBuoi thì phải nhập đúng mã.
+    Thời gian: trong PhutHetHanDungGio phút đầu sau giờ bắt đầu = Đúng giờ; sau đó đến PhutHetHanDiemDanh = Trễ; quá hạn = không điểm danh được.
+    """
     conn = get_connection()
     cursor = conn.cursor()
-    
+
     try:
-        # Check đã điểm danh chưa
-        cursor.execute("""
-            SELECT COUNT(*) FROM DiemDanh 
-            WHERE MaSV = ? AND MaBuoi = ?
-        """, (ma_sv, ma_buoi))
-        
-        if cursor.fetchone()[0] > 0:
-            return {
-                "success": False,
-                "message": "Sinh viên đã điểm danh rồi"
-            }
-        
-        # Lấy giờ bắt đầu
-        cursor.execute("SELECT GioBatDau FROM BuoiHoc WHERE MaBuoi = ?", (ma_buoi,))
-        result = cursor.fetchone()
-        
-        if not result:
+        cursor.execute(
+            """
+            SELECT bh.MaLHP, bh.NgayHoc, bh.GioBatDau, bh.MaXacThucBuoi, bh.PhutHetHanDungGio, bh.PhutHetHanDiemDanh
+            FROM BuoiHoc bh
+            WHERE bh.MaBuoi = ?
+            """,
+            (ma_buoi,),
+        )
+        row_bh = cursor.fetchone()
+        if not row_bh:
             raise HTTPException(status_code=404, detail="Không tìm thấy buổi học")
-        
-        gio_bat_dau = result[0]
-        gio_hien_tai = datetime.now().time()
-        
-        # Xác định trạng thái
-        gio_bat_dau_dt = datetime.combine(datetime.today(), gio_bat_dau)
-        gio_cho_phep = (gio_bat_dau_dt + timedelta(minutes=15)).time()
-        
-        if gio_hien_tai <= gio_bat_dau:
+
+        ma_lhp = row_bh[0]
+        ngay_hoc = row_bh[1]
+        gio_bat_dau = row_bh[2]
+        ma_db_code = (row_bh[3] or "").strip() if row_bh[3] is not None else ""
+        phut_dung = int(row_bh[4]) if row_bh[4] is not None else 15
+        phut_max = int(row_bh[5]) if row_bh[5] is not None else 60
+
+        cursor.execute(
+            "SELECT COUNT(*) FROM DangKyHoc WHERE MaSV = ? AND MaLHP = ?",
+            (ma_sv, ma_lhp),
+        )
+        if cursor.fetchone()[0] == 0:
+            return {"success": False, "message": "Bạn không đăng ký lớp học phần của buổi này"}
+
+        if ma_db_code:
+            if not (ma_xac_thuc or "").strip():
+                return {"success": False, "message": "Vui lòng nhập mã buổi học do giảng viên cung cấp"}
+            if (ma_xac_thuc or "").strip().lower() != ma_db_code.lower():
+                return {"success": False, "message": "Mã buổi học không đúng"}
+
+        cursor.execute(
+            """
+            SELECT COUNT(*) FROM DiemDanh
+            WHERE MaSV = ? AND MaBuoi = ?
+            """,
+            (ma_sv, ma_buoi),
+        )
+        if cursor.fetchone()[0] > 0:
+            return {"success": False, "message": "Sinh viên đã điểm danh rồi"}
+
+        if isinstance(ngay_hoc, datetime):
+            d = ngay_hoc.date()
+        elif isinstance(ngay_hoc, date):
+            d = ngay_hoc
+        else:
+            d = datetime.now().date()
+
+        if isinstance(gio_bat_dau, str):
+            parts = gio_bat_dau.split(":")
+            gt = time(int(parts[0]), int(parts[1]), int(parts[2]) if len(parts) > 2 else 0)
+        else:
+            gt = gio_bat_dau
+
+        start_dt = datetime.combine(d, gt)
+        now = datetime.now()
+        delta_min = (now - start_dt).total_seconds() / 60.0
+
+        if delta_min < -10:
+            return {"success": False, "message": "Chưa đến thời gian mở điểm danh (mở trước 10 phút)"}
+
+        if delta_min > phut_max:
+            return {"success": False, "message": f"Đã quá {phut_max} phút kể từ giờ bắt đầu — không thể điểm danh (vắng)"}
+
+        if delta_min <= phut_dung:
             trang_thai = "Đúng giờ"
-        elif gio_hien_tai <= gio_cho_phep:
-            trang_thai = "Trễ"
         else:
             trang_thai = "Trễ"
-        
-        # Ghi điểm danh
-        cursor.execute("""
+
+        cursor.execute(
+            """
             INSERT INTO DiemDanh (MaSV, MaBuoi, ThoiGianQuet, TrangThai, NguonQuet)
             VALUES (?, ?, ?, ?, ?)
-        """, (ma_sv, ma_buoi, datetime.now(), trang_thai, "Webcam"))
-        
+            """,
+            (ma_sv, ma_buoi, datetime.now(), trang_thai, "Webcam"),
+        )
+
         conn.commit()
-        
+
         return {
             "success": True,
             "message": f"Điểm danh thành công - {trang_thai}",
             "trang_thai": trang_thai,
-            "thoi_gian": datetime.now().isoformat()
+            "thoi_gian": datetime.now().isoformat(),
         }
-        
+
     finally:
         cursor.close()
         conn.close()

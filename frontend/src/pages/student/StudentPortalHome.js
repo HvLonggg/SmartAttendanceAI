@@ -16,10 +16,11 @@ import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import PersonIcon from '@mui/icons-material/Person';
 import RateReviewIcon from '@mui/icons-material/RateReview';
-import CameraAltIcon from '@mui/icons-material/CameraAlt';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import { studentPortalAPI, analyticsAPI } from '../../services/api';
 import { useAuth } from '../../auth/AuthContext';
+import { formatApiError } from '../../utils/apiError';
+import { useI18n } from '../../i18n/I18nContext';
 
 const cardSx = {
   borderRadius: 3,
@@ -36,6 +37,7 @@ const cardSx = {
 export default function StudentPortalHome() {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { t } = useI18n();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [courses, setCourses] = useState([]);
@@ -60,7 +62,7 @@ export default function StudentPortalHome() {
         setAnalytics(ana.data || []);
       } catch (e) {
         if (!ok) return;
-        setError(e.response?.data?.detail || 'Không tải được dữ liệu cổng sinh viên');
+        setError(formatApiError(e.response?.data?.detail, t('studentPortalHome.loadError')));
       } finally {
         if (ok) setLoading(false);
       }
@@ -87,39 +89,32 @@ export default function StudentPortalHome() {
 
   const tiles = [
     {
-      title: 'Buổi học',
-      sub: `${todaySessions.length} buổi hôm nay`,
+      title: t('studentPortalHome.tiles.sessions'),
+      sub: t('studentPortalHome.tiles.sessionsSub', { count: todaySessions.length }),
       icon: <CalendarMonthIcon sx={{ fontSize: 40, color: '#fff' }} />,
       path: '/student/sessions',
       grad: 'linear-gradient(135deg, #2563eb 0%, #7c3aed 100%)',
     },
     {
-      title: 'Môn đã đăng ký',
-      sub: `${courses.length} lớp học phần`,
+      title: t('studentPortalHome.tiles.courses'),
+      sub: t('studentPortalHome.tiles.coursesSub', { count: courses.length }),
       icon: <MenuBookIcon sx={{ fontSize: 40, color: '#fff' }} />,
       path: '/student/courses',
       grad: 'linear-gradient(135deg, #db2777 0%, #f97316 100%)',
     },
     {
-      title: 'Hồ sơ của tôi',
-      sub: 'Trạng thái, ảnh đại diện, điểm danh',
+      title: t('studentPortalHome.tiles.profile'),
+      sub: t('studentPortalHome.tiles.profileSub'),
       icon: <PersonIcon sx={{ fontSize: 40, color: '#fff' }} />,
       path: '/student/profile',
       grad: 'linear-gradient(135deg, #059669 0%, #0d9488 100%)',
     },
     {
-      title: 'Phản hồi & góp ý',
-      sub: 'Chương trình, giảng viên',
+      title: t('studentPortalHome.tiles.feedback'),
+      sub: t('studentPortalHome.tiles.feedbackSub'),
       icon: <RateReviewIcon sx={{ fontSize: 40, color: '#fff' }} />,
       path: '/student/feedback',
       grad: 'linear-gradient(135deg, #7c3aed 0%, #6366f1 100%)',
-    },
-    {
-      title: 'Điểm danh Camera',
-      sub: 'Nhận diện khuôn mặt',
-      icon: <CameraAltIcon sx={{ fontSize: 40, color: '#fff' }} />,
-      path: '/attendance',
-      grad: 'linear-gradient(135deg, #0ea5e9 0%, #6366f1 100%)',
     },
   ];
 
@@ -136,14 +131,20 @@ export default function StudentPortalHome() {
         }}
       >
         <Typography variant="h4" fontWeight={900} gutterBottom>
-          Xin chào, {user?.ho_ten || user?.username}
+          {t('studentPortalHome.greeting', { name: user?.ho_ten || user?.username })}
         </Typography>
         <Typography variant="body2" sx={{ opacity: 0.95, maxWidth: 560 }}>
-          Cổng sinh viên — theo dõi lịch học, môn đăng ký, hồ sơ và gửi phản hồi cho nhà trường.
+          {t('studentPortalHome.subtitle')}
         </Typography>
         <Box sx={{ mt: 2, display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-          <Chip label={`Mã SV: ${user?.ma_sv || '—'}`} sx={{ bgcolor: 'rgba(255,255,255,0.2)', color: '#fff', fontWeight: 700 }} />
-          <Chip label={`${courses.length} môn`} sx={{ bgcolor: 'rgba(255,255,255,0.2)', color: '#fff' }} />
+          <Chip
+            label={t('studentPortalHome.myStudentId', { id: user?.ma_sv || '—' })}
+            sx={{ bgcolor: 'rgba(255,255,255,0.2)', color: '#fff', fontWeight: 700 }}
+          />
+          <Chip
+            label={t('studentPortalHome.coursesCount', { count: courses.length })}
+            sx={{ bgcolor: 'rgba(255,255,255,0.2)', color: '#fff' }}
+          />
         </Box>
       </Box>
 
@@ -158,11 +159,9 @@ export default function StudentPortalHome() {
           <Card sx={{ ...cardSx, p: 2, background: 'linear-gradient(145deg, #f8fafc, #eef2ff)' }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
               <TrendingUpIcon color="primary" />
-              <Typography fontWeight={800}>Tổng quan chuyên cần</Typography>
+              <Typography fontWeight={800}>{t('studentPortalHome.totalAttendance')}</Typography>
             </Box>
-            <Typography variant="caption" color="text.secondary">
-              Theo các lớp đã đăng ký (ước lượng)
-            </Typography>
+            <Typography variant="caption" color="text.secondary">{t('studentPortalHome.totalAttendanceHint')}</Typography>
             <Box sx={{ mt: 1 }}>
               <Typography variant="h5" fontWeight={900} color="primary.main">
                 {rate}%
@@ -173,16 +172,14 @@ export default function StudentPortalHome() {
                 sx={{ mt: 1, height: 10, borderRadius: 5 }}
               />
               <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
-                {attended} / {totalClasses} buổi có mặt
+                {t('studentPortalHome.attendanceCaption', { attended, total: totalClasses })}
               </Typography>
             </Box>
           </Card>
         </Grid>
         <Grid item xs={12} md={6}>
           <Card sx={{ ...cardSx, p: 2 }}>
-            <Typography fontWeight={800} gutterBottom>
-              Sắp tới
-            </Typography>
+            <Typography fontWeight={800} gutterBottom>{t('studentPortalHome.upcoming')}</Typography>
             {sessions.slice(0, 4).map((s) => (
               <Box
                 key={s.ma_buoi}
@@ -205,35 +202,33 @@ export default function StudentPortalHome() {
             ))}
             {!sessions.length && (
               <Typography variant="body2" color="text.secondary">
-                Chưa có buổi học hoặc chưa đăng ký môn.
+                {t('studentPortalHome.emptyUpcoming')}
               </Typography>
             )}
           </Card>
         </Grid>
       </Grid>
 
-      <Typography variant="h6" fontWeight={800} sx={{ mb: 2 }}>
-        Truy cập nhanh
-      </Typography>
+      <Typography variant="h6" fontWeight={800} sx={{ mb: 2 }}>{t('studentPortalHome.quickAccess')}</Typography>
       <Grid container spacing={2}>
-        {tiles.map((t) => (
-          <Grid item xs={12} sm={6} md={4} key={t.path}>
+        {tiles.map((tile) => (
+          <Grid item xs={12} sm={6} md={4} key={tile.path}>
             <Card sx={cardSx}>
-              <CardActionArea onClick={() => navigate(t.path)}>
-                <Box sx={{ background: t.grad, px: 2, py: 2, display: 'flex', alignItems: 'center', gap: 2 }}>
-                  {t.icon}
+              <CardActionArea onClick={() => navigate(tile.path)}>
+                <Box sx={{ background: tile.grad, px: 2, py: 2, display: 'flex', alignItems: 'center', gap: 2 }}>
+                  {tile.icon}
                   <Box>
                     <Typography variant="h6" fontWeight={800} sx={{ color: '#fff' }}>
-                      {t.title}
+                      {tile.title}
                     </Typography>
                     <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.9)' }}>
-                      {t.sub}
+                      {tile.sub}
                     </Typography>
                   </Box>
                 </Box>
                 <CardContent sx={{ py: 1.5 }}>
                   <Typography variant="caption" color="primary" fontWeight={700}>
-                    Mở trang →
+                    {t('studentPortalHome.openPage')}
                   </Typography>
                 </CardContent>
               </CardActionArea>

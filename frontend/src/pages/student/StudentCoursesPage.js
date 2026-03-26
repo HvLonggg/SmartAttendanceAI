@@ -18,10 +18,13 @@ import EmailIcon from '@mui/icons-material/Email';
 import PhoneIcon from '@mui/icons-material/Phone';
 import { studentPortalAPI, analyticsAPI } from '../../services/api';
 import { useAuth } from '../../auth/AuthContext';
+import { formatApiError } from '../../utils/apiError';
+import { useI18n } from '../../i18n/I18nContext';
 
-export default function StudentCoursesPage() {
+export default function StudentCoursesPage({ compact = false, maxItems = null }) {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { t } = useI18n();
   const [courses, setCourses] = useState([]);
   const [analytics, setAnalytics] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -42,7 +45,7 @@ export default function StudentCoursesPage() {
         setAnalytics(ana.data || []);
       } catch (e) {
         if (!ok) return;
-        setError(e.response?.data?.detail || 'Không tải được danh sách môn');
+        setError(formatApiError(e.response?.data?.detail, t('studentCoursesPage.loadFail')));
       } finally {
         if (ok) setLoading(false);
       }
@@ -64,17 +67,28 @@ export default function StudentCoursesPage() {
     return m;
   }, [analytics]);
 
+  const displayCourses = maxItems ? courses.slice(0, maxItems) : courses;
+
   return (
     <Box>
-      <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/student')} sx={{ mb: 2 }}>
-        Về trang sinh viên
-      </Button>
-      <Typography variant="h4" fontWeight={900} gutterBottom sx={{ background: 'linear-gradient(90deg,#db2777,#f97316)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-        Môn đã đăng ký
-      </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-        Thông tin giảng viên lấy từ hệ thống (bảng GiangVien + lớp học phần).
-      </Typography>
+      {!compact && (
+        <>
+          <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/student')} sx={{ mb: 2 }}>
+              {t('studentCoursesPage.back')}
+          </Button>
+          <Typography
+            variant="h4"
+            fontWeight={900}
+            gutterBottom
+            sx={{ background: 'linear-gradient(90deg,#db2777,#f97316)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}
+          >
+            {t('studentCoursesPage.title')}
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+            {t('studentCoursesPage.subtitle')}
+          </Typography>
+        </>
+      )}
 
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 
@@ -84,7 +98,7 @@ export default function StudentCoursesPage() {
         </Box>
       ) : (
         <Grid container spacing={2}>
-          {courses.map((c, idx) => {
+          {displayCourses.map((c, idx) => {
             const stat = rateByLhp[c.ma_lhp];
             const grad = ['linear-gradient(135deg,#6366f1,#8b5cf6)', 'linear-gradient(135deg,#ec4899,#f97316)', 'linear-gradient(135deg,#0d9488,#2563eb)'][idx % 3];
             return (
@@ -116,13 +130,17 @@ export default function StudentCoursesPage() {
                   </Box>
                   <Box sx={{ p: 2 }}>
                     <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                      Giảng viên
+                      {t('studentCoursesPage.teacherLabel')}
                     </Typography>
                     <Typography variant="body1" fontWeight={800} gutterBottom>
                       {c.giang_vien}
                     </Typography>
                     {c.ma_gv && (
-                      <Chip label={`MaGV: ${c.ma_gv}`} size="small" sx={{ mr: 0.5, mb: 1 }} />
+                      <Chip
+                        label={t('studentCoursesPage.maGvPrefix', { code: c.ma_gv })}
+                        size="small"
+                        sx={{ mr: 0.5, mb: 1 }}
+                      />
                     )}
                     <Divider sx={{ my: 1.5 }} />
                     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
@@ -140,20 +158,23 @@ export default function StudentCoursesPage() {
                       )}
                       {c.ghi_chu_gv && c.ghi_chu_gv !== c.giang_vien && (
                         <Typography variant="caption" color="text.secondary">
-                          Ghi chú lớp: {c.ghi_chu_gv}
+                          {t('studentCoursesPage.noteLabel', { note: c.ghi_chu_gv })}
                         </Typography>
                       )}
                     </Box>
                     {stat && (
                       <Box sx={{ mt: 2, p: 1.5, borderRadius: 2, bgcolor: 'action.hover' }}>
                         <Typography variant="caption" color="text.secondary">
-                          Chuyên cần (ước lượng)
+                          {t('studentCoursesPage.attendanceEstimated')}
                         </Typography>
                         <Typography variant="h6" fontWeight={900} color="primary.main">
                           {Number(stat.ty_le || 0).toFixed(1)}%
                         </Typography>
                         <Typography variant="caption">
-                          {stat.co_mat} / {stat.tong} buổi có mặt
+                          {t('studentCoursesPage.attendanceCaption', {
+                            present: stat.co_mat,
+                            total: stat.tong,
+                          })}
                         </Typography>
                       </Box>
                     )}
@@ -162,9 +183,9 @@ export default function StudentCoursesPage() {
               </Grid>
             );
           })}
-          {!courses.length && (
+          {!displayCourses.length && (
             <Grid item xs={12}>
-              <Alert severity="info">Bạn chưa có đăng ký môn nào trong CSDL (bảng DangKyHoc).</Alert>
+              <Alert severity="info">{t('studentCoursesPage.empty')}</Alert>
             </Grid>
           )}
         </Grid>

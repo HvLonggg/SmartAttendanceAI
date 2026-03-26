@@ -12,8 +12,10 @@ export default function AuthLayout({ children }) {
         alignItems: 'center',
         justifyContent: 'center',
         boxSizing: 'border-box',
-        background:
-          'radial-gradient(ellipse at top left, rgba(99,102,241,0.25), transparent 55%), radial-gradient(ellipse at bottom right, rgba(219,39,119,0.18), transparent 55%), #f5f5f5',
+        bgcolor: '#ffffff',
+        color: 'text.primary',
+        backgroundImage:
+          'radial-gradient(ellipse at top left, rgba(99,102,241,0.12), transparent 55%), radial-gradient(ellipse at bottom right, rgba(219,39,119,0.1), transparent 55%)',
         p: 2,
       }}
     >

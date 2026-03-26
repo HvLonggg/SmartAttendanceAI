@@ -31,11 +31,18 @@ import {
   Visibility as ViewIcon,
   Camera as CameraIcon,
 } from '@mui/icons-material';
-import { studentAPI } from '../services/api';
+import { studentAPI, teacherAPI } from '../services/api';
+import { useAuth } from '../auth/AuthContext';
 import { getStudentAvatarSrc } from '../utils/studentAvatar';
+import { formatApiError } from '../utils/apiError';
+import { useI18n } from '../i18n/I18nContext';
 
 function StudentList() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const { t, locale } = useI18n();
+  const dateLocale = locale === 'en' ? 'en-US' : 'vi-VN';
+  const isTeacher = user?.role === 'TEACHER';
   const [students, setStudents] = useState([]);
   const [filteredStudents, setFilteredStudents] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -55,8 +62,10 @@ function StudentList() {
   const [success, setSuccess] = useState(null);
 
   useEffect(() => {
+    if (!user?.role) return;
     fetchStudents();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.role]);
 
   useEffect(() => {
     const filtered = students.filter(student =>
@@ -70,12 +79,18 @@ function StudentList() {
 
   const fetchStudents = async () => {
     try {
-      const response = await studentAPI.getAll();
-      setStudents(response.data);
-      setFilteredStudents(response.data);
+      if (isTeacher) {
+        const response = await teacherAPI.getMyStudents();
+        setStudents(response.data);
+        setFilteredStudents(response.data);
+      } else {
+        const response = await studentAPI.getAll();
+        setStudents(response.data);
+        setFilteredStudents(response.data);
+      }
     } catch (err) {
       console.error('Error fetching students:', err);
-      setError('Không thể tải danh sách sinh viên');
+      setError(t('studentList.fetchFail'));
     }
   };
 
@@ -116,12 +131,12 @@ function StudentList() {
   const handleSubmit = async () => {
     try {
       await studentAPI.create(formData);
-      setSuccess('Thêm sinh viên thành công!');
+      setSuccess(t('studentList.addSuccess'));
       setOpenDialog(false);
       fetchStudents();
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
-      setError(err.response?.data?.detail || 'Có lỗi xảy ra khi thêm sinh viên');
+      setError(formatApiError(err.response?.data?.detail, t('studentList.addFail')));
     }
   };
 
@@ -132,17 +147,24 @@ function StudentList() {
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4" fontWeight="bold">
-          Danh sách Sinh viên
-        </Typography>
-        <Button
-          variant="contained"
-          color="primary"
-          startIcon={<AddIcon />}
-          onClick={handleOpenDialog}
-        >
-          Thêm sinh viên
-        </Button>
+        <Box>
+          <Typography variant="h4" fontWeight="bold">{t('studentList.title')}</Typography>
+          {isTeacher && (
+            <Typography variant="body2" color="text.secondary">
+              {t('studentList.subtitleTeacher')}
+            </Typography>
+          )}
+        </Box>
+        {!isTeacher && (
+          <Button
+            variant="contained"
+            color="primary"
+            startIcon={<AddIcon />}
+            onClick={handleOpenDialog}
+          >
+            {t('studentList.addStudent')}
+          </Button>
+        )}
       </Box>
 
       {error && (
@@ -161,7 +183,7 @@ function StudentList() {
         <CardContent>
           <TextField
             fullWidth
-            placeholder="Tìm kiếm theo tên, mã SV, lớp..."
+            placeholder={t('studentList.searchPlaceholder')}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             InputProps={{
@@ -178,14 +200,14 @@ function StudentList() {
             <Table>
               <TableHead>
                 <TableRow>
-                  <TableCell>Mã SV</TableCell>
-                  <TableCell>Họ và tên</TableCell>
-                  <TableCell>Ngày sinh</TableCell>
-                  <TableCell>Giới tính</TableCell>
-                  <TableCell>Lớp</TableCell>
-                  <TableCell>Khoa</TableCell>
-                  <TableCell>Trạng thái</TableCell>
-                  <TableCell align="right">Thao tác</TableCell>
+                  <TableCell>{t('studentList.table.studentCode')}</TableCell>
+                  <TableCell>{t('studentList.table.fullName')}</TableCell>
+                  <TableCell>{t('studentList.table.birthDate')}</TableCell>
+                  <TableCell>{t('studentList.table.gender')}</TableCell>
+                  <TableCell>{t('studentList.table.className')}</TableCell>
+                  <TableCell>{t('studentList.table.faculty')}</TableCell>
+                  <TableCell>{t('studentList.table.status')}</TableCell>
+                  <TableCell align="right">{t('studentList.table.actions')}</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -236,7 +258,7 @@ function StudentList() {
                       </TableCell>
                       <TableCell>
                         {student.ngay_sinh
-                          ? new Date(student.ngay_sinh).toLocaleDateString('vi-VN')
+                          ? new Date(student.ngay_sinh).toLocaleDateString(dateLocale)
                           : '-'}
                       </TableCell>
                       <TableCell>{student.gioi_tinh || '-'}</TableCell>
@@ -244,7 +266,7 @@ function StudentList() {
                       <TableCell>{student.khoa || '-'}</TableCell>
                       <TableCell>
                         <Chip
-                          label={student.trang_thai || 'Đang học'}
+                          label={student.trang_thai || t('studentList.statusDefault')}
                           color={student.trang_thai === 'Đang học' ? 'success' : 'default'}
                           size="small"
                         />
@@ -254,18 +276,20 @@ function StudentList() {
                           size="small"
                           color="primary"
                           onClick={() => handleViewStudent(student.ma_sv)}
-                          title="Xem chi tiết"
+                          title={t('studentList.viewDetail')}
                         >
                           <ViewIcon />
                         </IconButton>
-                        <IconButton
-                          size="small"
-                          color="secondary"
-                          onClick={() => navigate(`/students/${student.ma_sv}/training`)}
-                          title="Huấn luyện nhận diện"
-                        >
-                          <CameraIcon />
-                        </IconButton>
+                        {!isTeacher && (
+                          <IconButton
+                            size="small"
+                            color="secondary"
+                            onClick={() => navigate(`/students/${student.ma_sv}/training`)}
+                            title={t('studentList.trainingRecognition')}
+                          >
+                            <CameraIcon />
+                          </IconButton>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -280,21 +304,23 @@ function StudentList() {
             onPageChange={handleChangePage}
             rowsPerPage={rowsPerPage}
             onRowsPerPageChange={handleChangeRowsPerPage}
-            labelRowsPerPage="Số dòng mỗi trang:"
-            labelDisplayedRows={({ from, to, count }) => `${from}–${to} của ${count}`}
+            labelRowsPerPage={locale === 'en' ? 'Rows per page:' : 'Số dòng mỗi trang:'}
+            labelDisplayedRows={({ from, to, count }) =>
+              locale === 'en' ? `${from}–${to} of ${count}` : `${from}–${to} của ${count}`
+            }
           />
         </CardContent>
       </Card>
 
       {/* Dialog thêm sinh viên */}
       <Dialog open={openDialog} onClose={handleCloseDialog} maxWidth="md" fullWidth>
-        <DialogTitle>Thêm sinh viên mới</DialogTitle>
+        <DialogTitle>{t('studentList.dialog.title')}</DialogTitle>
         <DialogContent>
           <Grid container spacing={2} sx={{ mt: 1 }}>
             <Grid item xs={12} sm={6}>
               <TextField
                 fullWidth
-                label="Mã sinh viên"
+                label={t('studentList.dialog.studentCode')}
                 name="ma_sv"
                 value={formData.ma_sv}
                 onChange={handleInputChange}
@@ -304,7 +330,7 @@ function StudentList() {
             <Grid item xs={12} sm={6}>
               <TextField
                 fullWidth
-                label="Họ và tên"
+                label={t('studentList.dialog.fullName')}
                 name="ho_ten"
                 value={formData.ho_ten}
                 onChange={handleInputChange}
@@ -314,7 +340,7 @@ function StudentList() {
             <Grid item xs={12} sm={6}>
               <TextField
                 fullWidth
-                label="Ngày sinh"
+                label={t('studentList.dialog.birthDate')}
                 name="ngay_sinh"
                 type="date"
                 value={formData.ngay_sinh}
@@ -326,20 +352,20 @@ function StudentList() {
               <TextField
                 fullWidth
                 select
-                label="Giới tính"
+                label={t('studentList.dialog.gender')}
                 name="gioi_tinh"
                 value={formData.gioi_tinh}
                 onChange={handleInputChange}
                 SelectProps={{ native: true }}
               >
-                <option value="Nam">Nam</option>
-                <option value="Nữ">Nữ</option>
+                <option value="Nam">{t('studentList.dialog.genderMale')}</option>
+                <option value="Nữ">{t('studentList.dialog.genderFemale')}</option>
               </TextField>
             </Grid>
             <Grid item xs={12} sm={6}>
               <TextField
                 fullWidth
-                label="Lớp"
+                label={t('studentList.dialog.className')}
                 name="lop"
                 value={formData.lop}
                 onChange={handleInputChange}
@@ -348,7 +374,7 @@ function StudentList() {
             <Grid item xs={12} sm={6}>
               <TextField
                 fullWidth
-                label="Khoa"
+                label={t('studentList.dialog.faculty')}
                 name="khoa"
                 value={formData.khoa}
                 onChange={handleInputChange}
@@ -357,7 +383,7 @@ function StudentList() {
             <Grid item xs={12}>
               <TextField
                 fullWidth
-                label="Email"
+                label={t('studentList.dialog.email')}
                 name="email"
                 type="email"
                 value={formData.email}
@@ -367,9 +393,9 @@ function StudentList() {
           </Grid>
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleCloseDialog}>Hủy</Button>
+          <Button onClick={handleCloseDialog}>{t('studentList.dialog.cancel')}</Button>
           <Button onClick={handleSubmit} variant="contained" color="primary">
-            Thêm sinh viên
+            {t('studentList.dialog.confirmAdd')}
           </Button>
         </DialogActions>
       </Dialog>

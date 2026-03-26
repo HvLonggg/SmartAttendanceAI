@@ -14,15 +14,18 @@ import {
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import SendIcon from '@mui/icons-material/Send';
 import { studentPortalAPI } from '../../services/api';
+import { formatApiError } from '../../utils/apiError';
+import { useI18n } from '../../i18n/I18nContext';
 
 const LOAI = [
-  { value: 'CHUONG_TRINH', label: 'Chương trình / nội dung môn học' },
-  { value: 'GIANG_VIEN', label: 'Giảng viên' },
-  { value: 'GOP_Y', label: 'Góp ý chung / khác' },
+  { value: 'CHUONG_TRINH', labelKey: 'studentFeedbackPage.types.curriculum' },
+  { value: 'GIANG_VIEN', labelKey: 'studentFeedbackPage.types.teacher' },
+  { value: 'GOP_Y', labelKey: 'studentFeedbackPage.types.general' },
 ];
 
-export default function StudentFeedbackPage() {
+export default function StudentFeedbackPage({ compact = false, maxItems = null }) {
   const navigate = useNavigate();
+  const { t } = useI18n();
   const [courses, setCourses] = useState([]);
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -46,7 +49,7 @@ export default function StudentFeedbackPage() {
       setCourses(enr.data || []);
       setList(fb.data || []);
     } catch (e) {
-      setError(e.response?.data?.detail || 'Không tải dữ liệu');
+      setError(formatApiError(e.response?.data?.detail, t('studentFeedbackPage.loadFail')));
     } finally {
       setLoading(false);
     }
@@ -68,28 +71,39 @@ export default function StudentFeedbackPage() {
         noi_dung: noiDung,
         ma_lhp: maLhp || null,
       });
-      setOk('Đã gửi phản hồi. Cảm ơn bạn!');
+      setOk(t('studentFeedbackPage.okMessage'));
       setNoiDung('');
       setTieuDe('');
       await load();
     } catch (err) {
-      setError(err.response?.data?.detail || 'Gửi thất bại');
+      setError(formatApiError(err.response?.data?.detail, t('studentFeedbackPage.sendFail')));
     } finally {
       setSending(false);
     }
   };
 
+  const listToShow = maxItems ? list.slice(0, maxItems) : list;
+
   return (
     <Box>
-      <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/student')} sx={{ mb: 2 }}>
-        Về trang sinh viên
-      </Button>
-      <Typography variant="h4" fontWeight={900} gutterBottom sx={{ background: 'linear-gradient(90deg,#7c3aed,#6366f1)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-        Phản hồi & góp ý
-      </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Ý kiến của bạn được lưu để nhà trường / quản trị xem xét (không hiển thị công khai).
-      </Typography>
+      {!compact && (
+        <>
+          <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/student')} sx={{ mb: 2 }}>
+            {t('studentFeedbackPage.back')}
+          </Button>
+          <Typography
+            variant="h4"
+            fontWeight={900}
+            gutterBottom
+            sx={{ background: 'linear-gradient(90deg,#7c3aed,#6366f1)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}
+          >
+            {t('studentFeedbackPage.title')}
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            {t('studentFeedbackPage.subtitle')}
+          </Typography>
+        </>
+      )}
 
       {loading ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
@@ -99,9 +113,7 @@ export default function StudentFeedbackPage() {
         <>
           <Card sx={{ p: 3, mb: 3, borderRadius: 3, boxShadow: '0 12px 40px rgba(124,58,237,0.15)' }}>
             <form onSubmit={onSend}>
-              <Typography fontWeight={800} gutterBottom>
-                Gửi phản hồi mới
-              </Typography>
+              <Typography fontWeight={800} gutterBottom>{t('studentFeedbackPage.newTitle')}</Typography>
               {error && (
                 <Alert severity="error" sx={{ mb: 2 }}>
                   {error}
@@ -115,27 +127,27 @@ export default function StudentFeedbackPage() {
               <TextField
                 select
                 fullWidth
-                label="Loại"
+                label={t('studentFeedbackPage.typeLabel')}
                 value={loai}
                 onChange={(e) => setLoai(e.target.value)}
                 sx={{ mb: 2 }}
               >
                 {LOAI.map((o) => (
                   <MenuItem key={o.value} value={o.value}>
-                    {o.label}
+                    {t(o.labelKey)}
                   </MenuItem>
                 ))}
               </TextField>
               <TextField
                 select
                 fullWidth
-                label="Môn liên quan (tuỳ chọn)"
+                label={t('studentFeedbackPage.relatedCourseLabel')}
                 value={maLhp}
                 onChange={(e) => setMaLhp(e.target.value)}
                 sx={{ mb: 2 }}
-                helperText="Chỉ chọn môn bạn đã đăng ký"
+                helperText={t('studentFeedbackPage.helperSelectCourse')}
               >
-                <MenuItem value="">— Không chọn —</MenuItem>
+                <MenuItem value="">{t('studentFeedbackPage.noneOption')}</MenuItem>
                 {courses.map((c) => (
                   <MenuItem key={c.ma_lhp} value={c.ma_lhp}>
                     {c.ma_lhp} — {c.ten_mon}
@@ -144,7 +156,7 @@ export default function StudentFeedbackPage() {
               </TextField>
               <TextField
                 fullWidth
-                label="Tiêu đề (tuỳ chọn)"
+                label={t('studentFeedbackPage.titleField')}
                 value={tieuDe}
                 onChange={(e) => setTieuDe(e.target.value)}
                 sx={{ mb: 2 }}
@@ -153,22 +165,24 @@ export default function StudentFeedbackPage() {
                 fullWidth
                 multiline
                 minRows={4}
-                label="Nội dung"
+                label={t('studentFeedbackPage.contentField')}
                 value={noiDung}
                 onChange={(e) => setNoiDung(e.target.value)}
                 required
                 sx={{ mb: 2 }}
               />
               <Button type="submit" variant="contained" disabled={sending} startIcon={<SendIcon />} size="large">
-                {sending ? 'Đang gửi...' : 'Gửi phản hồi'}
+                {sending ? t('studentFeedbackPage.sending') : t('studentFeedbackPage.sendButton')}
               </Button>
             </form>
           </Card>
 
-          <Typography variant="h6" fontWeight={800} gutterBottom>
-            Phản hồi đã gửi
-          </Typography>
-          {list.map((f) => (
+          {!compact && (
+            <Typography variant="h6" fontWeight={800} gutterBottom>
+              {t('studentFeedbackPage.sentListTitle')}
+            </Typography>
+          )}
+          {listToShow.map((f) => (
             <Card key={f.id} sx={{ mb: 1.5, p: 2, borderRadius: 2, border: '1px solid', borderColor: 'divider' }}>
               <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1 }}>
                 <Chip label={f.loai} size="small" color="primary" variant="outlined" />
@@ -187,9 +201,9 @@ export default function StudentFeedbackPage() {
               </Typography>
             </Card>
           ))}
-          {!list.length && (
+          {!listToShow.length && (
             <Typography color="text.secondary" variant="body2">
-              Chưa có phản hồi nào.
+              {t('studentFeedbackPage.empty')}
             </Typography>
           )}
         </>

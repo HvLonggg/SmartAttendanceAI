@@ -1,50 +1,34 @@
 import React, { useState } from 'react';
-import { Box, Card, CardContent, Typography, Button, Stack, TextField, Alert, Avatar, MenuItem, Select } from '@mui/material';
+import { useNavigate } from 'react-router-dom';
+import { Box, Card, CardContent, Typography, Button, Stack, TextField, Alert, MenuItem, Select } from '@mui/material';
 import { useAuth } from '../auth/AuthContext';
+import AuthUserAvatar from '../components/AuthUserAvatar';
 import { authAPI } from '../services/api';
+import { formatApiError } from '../utils/apiError';
+import { useThemeMode } from '../theme/AppThemeContext';
+import { useI18n } from '../i18n/I18nContext';
 
 export default function SettingsPage() {
+  const navigate = useNavigate();
   const { user, logout } = useAuth();
+  const { mode, setMode } = useThemeMode();
+  const { t, localeSelectValue, setLocale } = useI18n();
 
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
 
-  const [themeMode, setThemeMode] = useState(() => localStorage.getItem('theme_mode') || 'light');
-  const [lang, setLang] = useState(() => localStorage.getItem('lang') || 'VIE');
-
-  const [otpBusy, setOtpBusy] = useState(false);
-  const [otp, setOtp] = useState('');
+  const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
-  const [otpSent, setOtpSent] = useState(false);
   const [pwdBusy, setPwdBusy] = useState(false);
 
-  const onToggleTheme = (mode) => {
-    setThemeMode(mode);
-    localStorage.setItem('theme_mode', mode);
-    window.location.reload();
+  const onToggleTheme = (nextMode) => {
+    setMode(nextMode);
   };
 
   const onToggleLang = (next) => {
-    setLang(next);
-    localStorage.setItem('lang', next);
-    setSuccess('Đã đổi ngôn ngữ (chỉ áp dụng ở một số màn hiện tại).');
-    setTimeout(() => setSuccess(null), 2000);
-  };
-
-  const sendOtp = async () => {
-    setError(null);
-    setSuccess(null);
-    setOtpBusy(true);
-    try {
-      await authAPI.forgotPassword({ email: user?.email });
-      setOtpSent(true);
-      setSuccess('Đã gửi OTP. Vui lòng kiểm tra email.');
-      setTimeout(() => setSuccess(null), 2500);
-    } catch (e) {
-      setError(e.response?.data?.detail || 'Không thể gửi OTP');
-    } finally {
-      setOtpBusy(false);
-    }
+    setLocale(next);
+    setSuccess(t('settings.langChanged'));
+    setTimeout(() => setSuccess(null), 2200);
   };
 
   const changePassword = async () => {
@@ -52,63 +36,77 @@ export default function SettingsPage() {
     setSuccess(null);
     setPwdBusy(true);
     try {
-      await authAPI.resetPasswordEmail({
-        email: user?.email,
-        otp,
+      await authAPI.changePassword({
+        old_password: oldPassword,
         new_password: newPassword,
       });
-      setSuccess('Đổi mật khẩu thành công.');
+      setSuccess(t('settings.pwdSuccess'));
       setTimeout(() => setSuccess(null), 2500);
-      setOtpSent(false);
-      setOtp('');
+      setOldPassword('');
       setNewPassword('');
     } catch (e) {
-      setError(e.response?.data?.detail || 'Đổi mật khẩu thất bại');
+      setError(formatApiError(e.response?.data?.detail, t('settings.pwdFail')));
     } finally {
       setPwdBusy(false);
     }
   };
 
+  const emailDisplay =
+    user?.email && !String(user.email).includes('@local.smartattendance')
+      ? user.email
+      : t('common.none');
+
   return (
     <Box>
-      <Typography variant="h4" gutterBottom fontWeight="bold">
-        Cài đặt
+      <Typography variant="h4" gutterBottom fontWeight="bold" color="text.primary">
+        {t('settings.title')}
       </Typography>
 
       <Stack spacing={2}>
         <Card>
-          <CardContent sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <Avatar sx={{ width: 56, height: 56, bgcolor: 'primary.main', fontWeight: 800 }}>
-              {user?.username?.charAt(0)}
-            </Avatar>
+          <CardContent sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+            <AuthUserAvatar sx={{ width: 56, height: 56 }} />
             <Box>
-              <Typography variant="h6" fontWeight="bold">
+              <Typography variant="h6" fontWeight="bold" color="text.primary">
                 {user?.username}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                Vai trò: <b>{user?.role}</b> • {user?.email}
+                {t('settings.role')}: <b>{user?.role ? t(`role.${user.role}`) : ''}</b>
+                {emailDisplay !== t('common.none') && (
+                  <>
+                    {' '}
+                    • {t('settings.email')}: <b>{emailDisplay}</b>
+                  </>
+                )}
               </Typography>
             </Box>
             <Box sx={{ flexGrow: 1 }} />
-            <Button color="error" variant="outlined" onClick={logout}>
-              Logout
+            <Button
+              color="error"
+              variant="outlined"
+              onClick={() => {
+                logout();
+                navigate('/auth/login');
+              }}
+            >
+              {t('layout.logout')}
             </Button>
           </CardContent>
         </Card>
 
         <Card>
           <CardContent>
-            <Typography variant="h6" fontWeight="bold" gutterBottom>
-              Giao diện
+            <Typography variant="h6" fontWeight="bold" gutterBottom color="text.primary">
+              {t('settings.appearance')}
             </Typography>
             <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ alignItems: 'center' }}>
-              <Select value={themeMode} onChange={(e) => onToggleTheme(e.target.value)} size="small">
-                <MenuItem value="light">Sáng</MenuItem>
-                <MenuItem value="dark">Tối</MenuItem>
+              <Select value={mode} onChange={(e) => onToggleTheme(e.target.value)} size="small">
+                <MenuItem value="light">{t('settings.themeLight')}</MenuItem>
+                <MenuItem value="dark">{t('settings.themeDark')}</MenuItem>
               </Select>
-              <Select value={lang} onChange={(e) => onToggleLang(e.target.value)} size="small">
-                <MenuItem value="VIE">VIE</MenuItem>
-                <MenuItem value="ENG">ENG</MenuItem>
+              <Select value={localeSelectValue} onChange={(e) => onToggleLang(e.target.value)} size="small">
+                <MenuItem value="VIE">{t('settings.langVi')}</MenuItem>
+                <MenuItem value="ENG">{t('settings.langEn')}</MenuItem>
               </Select>
             </Stack>
           </CardContent>
@@ -116,8 +114,11 @@ export default function SettingsPage() {
 
         <Card>
           <CardContent>
-            <Typography variant="h6" fontWeight="bold" gutterBottom>
-              Đổi mật khẩu
+            <Typography variant="h6" fontWeight="bold" gutterBottom color="text.primary">
+              {t('settings.changePassword')}
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              {t('settings.changePasswordHint')}
             </Typography>
             {error && (
               <Alert severity="error" sx={{ mb: 2 }}>
@@ -129,35 +130,30 @@ export default function SettingsPage() {
                 {success}
               </Alert>
             )}
-
-            {!otpSent ? (
-              <Box>
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                  Hệ thống sẽ gửi OTP tới email của bạn để xác thực đổi mật khẩu.
-                </Typography>
-                <Button variant="contained" disabled={otpBusy} onClick={sendOtp}>
-                  {otpBusy ? 'Đang gửi...' : 'Gửi OTP'}
-                </Button>
-              </Box>
-            ) : (
-              <Stack spacing={2}>
-                <TextField label="OTP" value={otp} onChange={(e) => setOtp(e.target.value)} required />
-                <TextField
-                  label="Mật khẩu mới"
-                  type="password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  required
-                />
-                <Button variant="contained" disabled={pwdBusy} onClick={changePassword}>
-                  {pwdBusy ? 'Đang cập nhật...' : 'Xác nhận đổi mật khẩu'}
-                </Button>
-              </Stack>
-            )}
+            <Stack spacing={2} sx={{ maxWidth: 420 }}>
+              <TextField
+                label={t('settings.currentPassword')}
+                type="password"
+                value={oldPassword}
+                onChange={(e) => setOldPassword(e.target.value)}
+                required
+                size="small"
+              />
+              <TextField
+                label={t('settings.newPassword')}
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                required
+                size="small"
+              />
+              <Button variant="contained" disabled={pwdBusy} onClick={changePassword}>
+                {pwdBusy ? t('settings.changing') : t('settings.confirmChange')}
+              </Button>
+            </Stack>
           </CardContent>
         </Card>
       </Stack>
     </Box>
   );
 }
-

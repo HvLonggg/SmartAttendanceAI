@@ -5,6 +5,7 @@ import VisibilityOff from '@mui/icons-material/VisibilityOff';
 import { useLocation, useNavigate } from 'react-router-dom';
 import AuthLayout from '../../layouts/AuthLayout';
 import { authAPI } from '../../services/api';
+import { formatApiError } from '../../utils/apiError';
 
 export default function ResetPasswordEmailPage() {
   const navigate = useNavigate();
@@ -28,7 +29,7 @@ export default function ResetPasswordEmailPage() {
       await authAPI.resetPasswordEmail({ email, otp, new_password: newPassword });
       navigate('/auth/login');
     } catch (err) {
-      setError(err.response?.data?.detail || 'Không thể đặt lại mật khẩu');
+      setError(formatApiError(err.response?.data?.detail, 'Không thể đặt lại mật khẩu'));
     } finally {
       setBusy(false);
     }

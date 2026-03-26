@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Grid,
   Card,
@@ -7,6 +7,17 @@ import {
   Box,
   CircularProgress,
   Alert,
+  useTheme,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableRow,
+  Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
 } from '@mui/material';
 import {
   People as PeopleIcon,
@@ -28,8 +39,9 @@ import {
   Cell,
 } from 'recharts';
 import { Navigate } from 'react-router-dom';
-import { analyticsAPI } from '../services/api';
+import { analyticsAPI, teacherAPI, adminTeachingAPI } from '../services/api';
 import { useAuth } from '../auth/AuthContext';
+import { useI18n } from '../i18n/I18nContext';
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042'];
 
@@ -39,10 +51,10 @@ function StatCard({ title, value, icon, color }) {
       <CardContent>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <Box>
-            <Typography color="textSecondary" gutterBottom variant="body2">
+            <Typography color="text.secondary" gutterBottom variant="body2">
               {title}
             </Typography>
-            <Typography variant="h4" component="div">
+            <Typography variant="h4" component="div" color="text.primary">
               {value}
             </Typography>
           </Box>
@@ -66,19 +78,60 @@ function StatCard({ title, value, icon, color }) {
 
 function Dashboard() {
   const { user } = useAuth();
+  const { t } = useI18n();
+  const theme = useTheme();
   const [stats, setStats] = useState(null);
+  const [adminOverview, setAdminOverview] = useState(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState(null);
+  const [selectedClassDetail, setSelectedClassDetail] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  const attendanceData = useMemo(
+    () => [
+      { name: t('dashboard.mon'), coMat: 45, vang: 5 },
+      { name: t('dashboard.tue'), coMat: 48, vang: 2 },
+      { name: t('dashboard.wed'), coMat: 47, vang: 3 },
+      { name: t('dashboard.thu'), coMat: 46, vang: 4 },
+      { name: t('dashboard.fri'), coMat: 44, vang: 6 },
+    ],
+    [t]
+  );
+
+  const statusData = useMemo(
+    () => [
+      { name: t('dashboard.onTime'), value: 75 },
+      { name: t('dashboard.late'), value: 20 },
+      { name: t('dashboard.absentShort'), value: 5 },
+    ],
+    [t]
+  );
 
   const fetchDashboardData = async () => {
     try {
       setLoading(true);
-      const response = await analyticsAPI.getDashboardStats();
-      setStats(response.data);
+      if (user?.role === 'TEACHER') {
+        const response = await teacherAPI.getAnalyticsSummary();
+        setStats(response.data);
+        setAdminOverview(null);
+      } else if (user?.role === 'ADMIN') {
+        const [response, overviewRes] = await Promise.all([
+          analyticsAPI.getDashboardStats(),
+          adminTeachingAPI.getDashboardOverview(),
+        ]);
+        setStats(response.data);
+        setAdminOverview(overviewRes.data || null);
+      } else {
+        const response = await analyticsAPI.getDashboardStats();
+        setStats(response.data);
+        setAdminOverview(null);
+      }
       setError(null);
     } catch (err) {
       console.error('Error fetching dashboard data:', err);
-      setError('Không thể tải dữ liệu dashboard');
+      setError(t('dashboard.loadError'));
     } finally {
       setLoading(false);
     }
@@ -87,7 +140,8 @@ function Dashboard() {
   useEffect(() => {
     if (user?.role === 'STUDENT') return;
     fetchDashboardData();
-  }, [user?.role]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.role, user?.ma_gv]);
 
   if (user?.role === 'STUDENT') {
     return <Navigate to="/student" replace />;
@@ -105,31 +159,228 @@ function Dashboard() {
     return <Alert severity="error">{error}</Alert>;
   }
 
-  // Sample data for charts (would come from API in production)
-  const attendanceData = [
-    { name: 'Thứ 2', coMat: 45, vang: 5 },
-    { name: 'Thứ 3', coMat: 48, vang: 2 },
-    { name: 'Thứ 4', coMat: 47, vang: 3 },
-    { name: 'Thứ 5', coMat: 46, vang: 4 },
-    { name: 'Thứ 6', coMat: 44, vang: 6 },
-  ];
+  const openClassDetail = async (maLHP) => {
+    setDetailOpen(true);
+    setDetailLoading(true);
+    setDetailError(null);
+    setSelectedClassDetail(null);
+    try {
+      const res = await adminTeachingAPI.getClassDetail(maLHP);
+      setSelectedClassDetail(res.data || null);
+    } catch (e) {
+      setDetailError('Không tải được chi tiết học phần');
+    } finally {
+      setDetailLoading(false);
+    }
+  };
 
-  const statusData = [
-    { name: 'Đúng giờ', value: 75 },
-    { name: 'Trễ', value: 20 },
-    { name: 'Vắng', value: 5 },
-  ];
+  if (user?.role === 'ADMIN') {
+    const s = adminOverview?.stats || {};
+    const byClass = adminOverview?.attendance_by_class || [];
+    const teacherLoad = adminOverview?.teacher_load || [];
+    const alerts = adminOverview?.alerts || [];
+    const teacherLoadChart = teacherLoad.map((x) => ({
+      name: x.ten_giang_vien || x.ma_gv || '—',
+      so_hoc_phan: x.so_hoc_phan || 0,
+    }));
+
+    return (
+      <Box>
+        <Typography variant="h4" gutterBottom fontWeight="bold" color="text.primary">
+          Tổng quan quản trị học phần
+        </Typography>
+
+        <Grid container spacing={3} sx={{ mb: 4 }}>
+          <Grid item xs={12} sm={6} md={3}>
+            <StatCard title="Tổng học phần" value={s.total_hoc_phan || 0} icon={<EventIcon />} color="#1976d2" />
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
+            <StatCard title="Tạo trong ngày" value={s.created_today || 0} icon={<CheckIcon />} color="#2e7d32" />
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
+            <StatCard title="Tạo trong tuần" value={s.created_week || 0} icon={<ScheduleIcon />} color="#ed6c02" />
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
+            <StatCard title="Tạo trong tháng" value={s.created_month || 0} icon={<PeopleIcon />} color="#6d28d9" />
+          </Grid>
+        </Grid>
+
+        <Grid container spacing={3}>
+          <Grid item xs={12} md={7}>
+            <Card>
+              <CardContent>
+                <Typography variant="h6" gutterBottom color="text.primary">
+                  Giảng viên được phân công nhiều/ít
+                </Typography>
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={teacherLoadChart}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="name" stroke="currentColor" />
+                    <YAxis stroke="currentColor" />
+                    <Tooltip contentStyle={{ backgroundColor: theme.palette.background.paper }} />
+                    <Legend />
+                    <Bar dataKey="so_hoc_phan" fill="#6366f1" name="Số học phần phân công" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          <Grid item xs={12} md={5}>
+            <Card>
+              <CardContent>
+                <Typography variant="h6" gutterBottom color="text.primary">
+                  Thông báo tổng quan
+                </Typography>
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+                  <Alert severity="info">Đã phân công: {s.assigned_count || 0} học phần</Alert>
+                  <Alert severity={(s.unassigned_count || 0) > 0 ? 'warning' : 'success'}>
+                    Chưa phân công: {s.unassigned_count || 0} học phần
+                  </Alert>
+                  {alerts.map((a, i) => (
+                    <Alert key={i} severity="info">
+                      {a}
+                    </Alert>
+                  ))}
+                </Box>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          <Grid item xs={12}>
+            <Card>
+              <CardContent>
+                <Typography variant="h6" gutterBottom color="text.primary">
+                  Dữ liệu điểm danh theo từng học phần đã phân công
+                </Typography>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Mã học phần</TableCell>
+                      <TableCell>Môn học</TableCell>
+                      <TableCell>Giảng viên phụ trách</TableCell>
+                      <TableCell align="right">Số buổi</TableCell>
+                      <TableCell align="right">Lượt điểm danh</TableCell>
+                      <TableCell align="right">Tỷ lệ đúng giờ</TableCell>
+                      <TableCell align="right">Chi tiết</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {byClass.map((r) => (
+                      <TableRow key={r.ma_lhp}>
+                        <TableCell sx={{ fontWeight: 700 }}>{r.ma_lhp}</TableCell>
+                        <TableCell>{r.ten_mon || '—'}</TableCell>
+                        <TableCell>{r.ten_giang_vien ? `${r.ten_giang_vien} (${r.ma_gv || '—'})` : '—'}</TableCell>
+                        <TableCell align="right">{r.so_buoi || 0}</TableCell>
+                        <TableCell align="right">{r.luot_diem_danh || 0}</TableCell>
+                        <TableCell align="right">{`${(r.ty_le_dung_gio || 0).toFixed(1)}%`}</TableCell>
+                        <TableCell align="right">
+                          <Button size="small" variant="outlined" onClick={() => openClassDetail(r.ma_lhp)}>
+                            Xem
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {byClass.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={7} align="center">
+                          Chưa có dữ liệu học phần được phân công.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          </Grid>
+        </Grid>
+
+        <Dialog open={detailOpen} onClose={() => setDetailOpen(false)} maxWidth="lg" fullWidth>
+          <DialogTitle>Chi tiết học phần {selectedClassDetail?.ma_lhp || ''}</DialogTitle>
+          <DialogContent dividers>
+            {detailLoading && <CircularProgress size={22} />}
+            {detailError && <Alert severity="error">{detailError}</Alert>}
+            {!detailLoading && !detailError && selectedClassDetail && (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <Alert severity="info">
+                  Tổng buổi: {selectedClassDetail.summary?.total_sessions || 0} | Tổng lượt điểm danh:{' '}
+                  {selectedClassDetail.summary?.total_attendance || 0} | Đúng giờ:{' '}
+                  {selectedClassDetail.summary?.on_time_count || 0} | Trễ:{' '}
+                  {selectedClassDetail.summary?.late_count || 0}
+                </Alert>
+
+                <Typography variant="subtitle1" fontWeight={700}>Danh sách buổi học giảng viên đã tạo</Typography>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Mã buổi</TableCell>
+                      <TableCell>Ngày học</TableCell>
+                      <TableCell>Giờ bắt đầu</TableCell>
+                      <TableCell align="right">Lượt điểm danh</TableCell>
+                      <TableCell align="right">Đúng giờ</TableCell>
+                      <TableCell align="right">Trễ</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {(selectedClassDetail.sessions || []).map((s) => (
+                      <TableRow key={s.ma_buoi}>
+                        <TableCell>{s.ma_buoi}</TableCell>
+                        <TableCell>{s.ngay_hoc ? new Date(s.ngay_hoc).toLocaleDateString('vi-VN') : '—'}</TableCell>
+                        <TableCell>{s.gio_bat_dau || '—'}</TableCell>
+                        <TableCell align="right">{s.attendance_count || 0}</TableCell>
+                        <TableCell align="right">{s.on_time_count || 0}</TableCell>
+                        <TableCell align="right">{s.late_count || 0}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+
+                <Typography variant="subtitle1" fontWeight={700}>Sinh viên đã điểm danh học phần này</Typography>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Mã SV</TableCell>
+                      <TableCell>Họ tên</TableCell>
+                      <TableCell align="right">Tổng lượt</TableCell>
+                      <TableCell align="right">Đúng giờ</TableCell>
+                      <TableCell align="right">Trễ</TableCell>
+                      <TableCell>Lần quét cuối</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {(selectedClassDetail.students || []).map((s) => (
+                      <TableRow key={s.ma_sv}>
+                        <TableCell>{s.ma_sv}</TableCell>
+                        <TableCell>{s.ho_ten || '—'}</TableCell>
+                        <TableCell align="right">{s.total_checkins || 0}</TableCell>
+                        <TableCell align="right">{s.on_time_count || 0}</TableCell>
+                        <TableCell align="right">{s.late_count || 0}</TableCell>
+                        <TableCell>{s.last_checkin ? new Date(s.last_checkin).toLocaleString('vi-VN') : '—'}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </Box>
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setDetailOpen(false)}>Đóng</Button>
+          </DialogActions>
+        </Dialog>
+      </Box>
+    );
+  }
 
   return (
     <Box>
-      <Typography variant="h4" gutterBottom fontWeight="bold">
-        Dashboard Tổng quan
+      <Typography variant="h4" gutterBottom fontWeight="bold" color="text.primary">
+        {user?.role === 'TEACHER' ? t('dashboard.titleTeacher') : t('dashboard.titleAdmin')}
       </Typography>
 
       <Grid container spacing={3} sx={{ mb: 4 }}>
         <Grid item xs={12} sm={6} md={3}>
           <StatCard
-            title="Tổng Sinh viên"
+            title={t('dashboard.totalStudents')}
             value={stats?.total_students || 0}
             icon={<PeopleIcon />}
             color="#1976d2"
@@ -137,7 +388,7 @@ function Dashboard() {
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
           <StatCard
-            title="Buổi học hôm nay"
+            title={t('dashboard.todaySessions')}
             value={stats?.today_sessions || 0}
             icon={<EventIcon />}
             color="#2e7d32"
@@ -145,7 +396,7 @@ function Dashboard() {
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
           <StatCard
-            title="Lượt điểm danh"
+            title={t('dashboard.attendanceCount')}
             value={stats?.today_attendance || 0}
             icon={<CheckIcon />}
             color="#ed6c02"
@@ -153,7 +404,7 @@ function Dashboard() {
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
           <StatCard
-            title="Tỷ lệ đi trễ"
+            title={t('dashboard.lateRate')}
             value={`${stats?.late_rate?.toFixed(1) || 0}%`}
             icon={<ScheduleIcon />}
             color="#d32f2f"
@@ -162,34 +413,32 @@ function Dashboard() {
       </Grid>
 
       <Grid container spacing={3}>
-        {/* Biểu đồ cột - Chuyên cần theo ngày */}
         <Grid item xs={12} md={7}>
           <Card>
             <CardContent>
-              <Typography variant="h6" gutterBottom>
-                Thống kê chuyên cần tuần này
+              <Typography variant="h6" gutterBottom color="text.primary">
+                {t('dashboard.weekAttendance')}
               </Typography>
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart data={attendanceData}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="name" />
-                  <YAxis />
-                  <Tooltip />
+                  <XAxis dataKey="name" stroke="currentColor" />
+                  <YAxis stroke="currentColor" />
+                  <Tooltip contentStyle={{ backgroundColor: theme.palette.background.paper }} />
                   <Legend />
-                  <Bar dataKey="coMat" fill="#2e7d32" name="Có mặt" />
-                  <Bar dataKey="vang" fill="#d32f2f" name="Vắng" />
+                  <Bar dataKey="coMat" fill="#2e7d32" name={t('dashboard.present')} />
+                  <Bar dataKey="vang" fill="#d32f2f" name={t('dashboard.absent')} />
                 </BarChart>
               </ResponsiveContainer>
             </CardContent>
           </Card>
         </Grid>
 
-        {/* Biểu đồ tròn - Trạng thái điểm danh */}
         <Grid item xs={12} md={5}>
           <Card>
             <CardContent>
-              <Typography variant="h6" gutterBottom>
-                Phân bố trạng thái
+              <Typography variant="h6" gutterBottom color="text.primary">
+                {t('dashboard.statusDist')}
               </Typography>
               <ResponsiveContainer width="100%" height={300}>
                 <PieChart>
@@ -207,30 +456,23 @@ function Dashboard() {
                       <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                     ))}
                   </Pie>
-                  <Tooltip />
+                  <Tooltip contentStyle={{ backgroundColor: theme.palette.background.paper }} />
                 </PieChart>
               </ResponsiveContainer>
             </CardContent>
           </Card>
         </Grid>
 
-        {/* Thông báo nhanh */}
         <Grid item xs={12}>
           <Card>
             <CardContent>
-              <Typography variant="h6" gutterBottom>
-                Thông báo & Cảnh báo
+              <Typography variant="h6" gutterBottom color="text.primary">
+                {t('dashboard.alerts')}
               </Typography>
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <Alert severity="warning">
-                  5 sinh viên có tỷ lệ chuyên cần dưới 80% - Nguy cơ không đủ điều kiện dự thi
-                </Alert>
-                <Alert severity="info">
-                  Buổi học tiếp theo: Lập trình Web - 14:00 - Phòng A101
-                </Alert>
-                <Alert severity="success">
-                  Hệ thống hoạt động bình thường. Độ chính xác nhận diện: 98.5%
-                </Alert>
+                <Alert severity="warning">{t('dashboard.alertLowAttendance')}</Alert>
+                <Alert severity="info">{t('dashboard.alertNext')}</Alert>
+                <Alert severity="success">{t('dashboard.alertOk')}</Alert>
               </Box>
             </CardContent>
           </Card>

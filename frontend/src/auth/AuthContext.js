@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { authAPI } from '../services/api';
 
 const AuthContext = createContext(null);
@@ -15,6 +16,8 @@ export function AuthProvider({ children }) {
   });
 
   const [user, setUser] = useState(null);
+  /** Tăng sau login / refreshUser để tải lại ảnh auth (blob) khi đổi file (cùng tên file vẫn bust cache). */
+  const [avatarNonce, setAvatarNonce] = useState(0);
   const [loading, setLoading] = useState(true);
 
   const apiReady = useMemo(() => true, []);
@@ -37,14 +40,18 @@ export function AuthProvider({ children }) {
   const login = async (payload) => {
     const res = await authAPI.login(payload);
     const nextToken = res.data.token;
-    setToken(nextToken);
     try {
       localStorage.setItem(TOKEN_KEY, nextToken);
     } catch {
       // ignore
     }
     const me = await fetchMe(nextToken);
-    setUser(me);
+    // Gộp token + user trong một commit để sau navigate() không bị RequireAuth thấy user=null
+    flushSync(() => {
+      setToken(nextToken);
+      setUser(me);
+      setAvatarNonce((n) => n + 1);
+    });
     return me;
   };
 
@@ -74,8 +81,22 @@ export function AuthProvider({ children }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiReady, token]);
 
+  const refreshUser = async () => {
+    try {
+      if (!token) return null;
+      const me = await fetchMe();
+      setUser(me);
+      setAvatarNonce((n) => n + 1);
+      return me;
+    } catch {
+      return null;
+    }
+  };
+
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, logout, refresh: fetchMe }}>
+    <AuthContext.Provider
+      value={{ user, token, loading, login, logout, refresh: fetchMe, refreshUser, avatarNonce }}
+    >
       {children}
     </AuthContext.Provider>
   );

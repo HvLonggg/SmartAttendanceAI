@@ -36,11 +36,15 @@ import {
 } from '@mui/icons-material';
 import axios from 'axios';
 import { getStudentAvatarSrc } from '../utils/studentAvatar';
+import { formatApiError } from '../utils/apiError';
 import { getApiPathPrefix } from '../config/apiBase';
+import { useI18n } from '../i18n/I18nContext';
 
 const API = getApiPathPrefix();
 
 function EnhancedAttendanceCamera() {
+  const { t, locale } = useI18n();
+  const dateTimeLocale = locale === 'en' ? 'en-US' : 'vi-VN';
   const webcamRef = useRef(null);
   const [isCapturing, setIsCapturing] = useState(false);
   const [sessions, setSessions] = useState([]);
@@ -89,7 +93,7 @@ function EnhancedAttendanceCamera() {
         setSelectedSession(response.data[0].ma_buoi);
       }
     } catch (err) {
-      setError('Không thể tải danh sách buổi học');
+      setError(t('enhancedAttendanceCamera.errorLoadSessions'));
     }
   };
 
@@ -148,7 +152,12 @@ function EnhancedAttendanceCamera() {
           );
 
           if (checkinResponse.data.success) {
-            setSuccess(`✅ ${result.student_info.ho_ten} - ${checkinResponse.data.trang_thai}`);
+            setSuccess(
+              t('enhancedAttendanceCamera.successCheckin', {
+                name: result.student_info.ho_ten,
+                status: checkinResponse.data.trang_thai,
+              })
+            );
             fetchSessionAttendance();
             setAvatarKey((k) => k + 1);
             
@@ -162,21 +171,25 @@ function EnhancedAttendanceCamera() {
             // Already checked in - silent fail
             console.log('Already checked in');
           } else {
-            setError('Lỗi khi điểm danh');
+            setError(formatApiError(err.response?.data?.detail, t('enhancedAttendanceCamera.errorRecognize')));
           }
         }
       } else if (!result.success) {
         // Show why recognition failed
         if (result.confidence > 0) {
-          setError(`Độ tin cậy thấp (${(result.confidence * 100).toFixed(1)}%). Hãy đưa mặt gần camera hơn.`);
+          setError(
+            t('enhancedAttendanceCamera.errorLowConfidence', {
+              percent: (result.confidence * 100).toFixed(1),
+            })
+          );
         } else {
-          setError('Không phát hiện khuôn mặt. Hãy nhìn thẳng vào camera.');
+          setError(t('enhancedAttendanceCamera.errorNoFace'));
         }
         setTimeout(() => setError(null), 2000);
       }
     } catch (err) {
       console.error('Recognition error:', err);
-      setError('Lỗi khi nhận diện');
+      setError(t('enhancedAttendanceCamera.errorRecognize'));
       setTimeout(() => setError(null), 2000);
     } finally {
       setLoading(false);
@@ -185,7 +198,7 @@ function EnhancedAttendanceCamera() {
 
   const startCapturing = () => {
     if (!selectedSession) {
-      setError('Vui lòng chọn buổi học!');
+      setError(t('enhancedAttendanceCamera.errorSelectSession'));
       return;
     }
     setIsCapturing(true);
@@ -204,15 +217,15 @@ function EnhancedAttendanceCamera() {
   };
 
   const getConfidenceLabel = (confidence) => {
-    if (confidence >= 0.8) return 'Rất cao';
-    if (confidence >= 0.65) return 'Tốt';
-    return 'Thấp';
+    if (confidence >= 0.8) return t('enhancedAttendanceCamera.confidenceVeryHigh');
+    if (confidence >= 0.65) return t('enhancedAttendanceCamera.confidenceGood');
+    return t('enhancedAttendanceCamera.confidenceLow');
   };
 
   return (
     <Box>
       <Typography variant="h4" gutterBottom fontWeight="bold">
-        Điểm danh bằng Nhận diện Khuôn mặt
+        {t('enhancedAttendanceCamera.title')}
       </Typography>
 
       {error && (
@@ -236,11 +249,11 @@ function EnhancedAttendanceCamera() {
               <Grid container spacing={2} alignItems="center">
                 <Grid item xs={12} md={8}>
                   <FormControl fullWidth>
-                    <InputLabel>Chọn buổi học</InputLabel>
+                    <InputLabel>{t('enhancedAttendanceCamera.selectSession')}</InputLabel>
                     <Select
                       value={selectedSession}
                       onChange={(e) => setSelectedSession(e.target.value)}
-                      label="Chọn buổi học"
+                      label={t('enhancedAttendanceCamera.selectSession')}
                       disabled={isCapturing}
                     >
                       {sessions.map((session) => (
@@ -261,7 +274,7 @@ function EnhancedAttendanceCamera() {
                         disabled={isCapturing}
                       />
                     }
-                    label="Tự động quét"
+                    label={t('enhancedAttendanceCamera.autoScan')}
                   />
                 </Grid>
               </Grid>
@@ -294,7 +307,7 @@ function EnhancedAttendanceCamera() {
                 {/* Status Overlay */}
                 {isCapturing && (
                   <Chip
-                    label="ĐANG QUÉT"
+                    label={t('enhancedAttendanceCamera.statusScanning')}
                     color="error"
                     size="small"
                     sx={{
@@ -341,7 +354,7 @@ function EnhancedAttendanceCamera() {
                     onClick={startCapturing}
                     disabled={!selectedSession}
                   >
-                    Bắt đầu điểm danh
+                    {t('enhancedAttendanceCamera.startAttendance')}
                   </Button>
                 ) : (
                   <>
@@ -352,7 +365,7 @@ function EnhancedAttendanceCamera() {
                       startIcon={<StopIcon />}
                       onClick={stopCapturing}
                     >
-                      Dừng lại
+                      {t('enhancedAttendanceCamera.stopAttendance')}
                     </Button>
                     
                     {!autoCapture && (
@@ -362,7 +375,7 @@ function EnhancedAttendanceCamera() {
                         onClick={captureAndRecognize}
                         disabled={loading}
                       >
-                        Chụp thủ công
+                        {t('enhancedAttendanceCamera.manualCapture')}
                       </Button>
                     )}
                   </>
@@ -401,7 +414,9 @@ function EnhancedAttendanceCamera() {
                           
                           <Box sx={{ mt: 1 }}>
                             <Chip
-                              label={`Độ chính xác: ${(recognitionResult.confidence * 100).toFixed(1)}%`}
+                              label={t('enhancedAttendanceCamera.confidenceLabel', {
+                                percent: (recognitionResult.confidence * 100).toFixed(1),
+                              })}
                               color={getConfidenceColor(recognitionResult.confidence)}
                               size="small"
                               sx={{ mr: 1 }}
@@ -420,7 +435,7 @@ function EnhancedAttendanceCamera() {
                       {recognitionResult.top_matches && recognitionResult.top_matches.length > 1 && (
                         <Box sx={{ mt: 2, pt: 2, borderTop: '1px solid rgba(0,0,0,0.1)' }}>
                           <Typography variant="caption" color="text.secondary">
-                            Độ tương đồng với các sinh viên khác:
+                            {t('enhancedAttendanceCamera.topMatchesLabel')}
                           </Typography>
                           <Box sx={{ mt: 1 }}>
                             {recognitionResult.top_matches.slice(1, 3).map((match, idx) => (
@@ -445,7 +460,7 @@ function EnhancedAttendanceCamera() {
                   ) : (
                     <Alert severity="warning" icon={<WarningIcon />}>
                       <Typography variant="subtitle2" fontWeight="bold">
-                        Không nhận diện được
+                        {t('enhancedAttendanceCamera.notRecognizedTitle')}
                       </Typography>
                       <Typography variant="body2">
                         {recognitionResult.message}
@@ -453,8 +468,10 @@ function EnhancedAttendanceCamera() {
                       {recognitionResult.top_matches && recognitionResult.top_matches.length > 0 && (
                         <Box sx={{ mt: 1 }}>
                           <Typography variant="caption">
-                            Gần giống nhất: {recognitionResult.top_matches[0].identity} 
-                            ({(recognitionResult.top_matches[0].score * 100).toFixed(1)}%)
+                            {t('enhancedAttendanceCamera.closestMatch', {
+                              identity: recognitionResult.top_matches[0].identity,
+                              percent: (recognitionResult.top_matches[0].score * 100).toFixed(1),
+                            })}
                           </Typography>
                         </Box>
                       )}
@@ -466,14 +483,14 @@ function EnhancedAttendanceCamera() {
               {/* Instructions */}
               <Alert severity="info" sx={{ mt: 2 }}>
                 <Typography variant="subtitle2" fontWeight="bold" gutterBottom>
-                  💡 Hướng dẫn sử dụng:
+                  💡 {t('enhancedAttendanceCamera.instructionsTitle')}
                 </Typography>
                 <ul style={{ marginTop: 4, paddingLeft: 20, marginBottom: 0 }}>
-                  <li>Nhìn thẳng vào camera, khuôn mặt rõ ràng</li>
-                  <li>Đảm bảo ánh sáng tốt</li>
-                  <li>Khoảng cách 50-100cm từ camera</li>
-                  <li>Hệ thống tự động quét mỗi {captureInterval/1000} giây</li>
-                  <li>Độ chính xác >= 65% mới được chấp nhận</li>
+                  <li>{t('enhancedAttendanceCamera.uiLookHint')}</li>
+                  <li>{t('enhancedAttendanceCamera.uiLightHint')}</li>
+                  <li>{t('enhancedAttendanceCamera.uiLeftHint')}</li>
+                  <li>{t('enhancedAttendanceCamera.uiAutoHint', { seconds: captureInterval / 1000 })}</li>
+                  <li>{t('enhancedAttendanceCamera.uiAcceptHint')}</li>
                 </ul>
               </Alert>
             </CardContent>
@@ -485,9 +502,7 @@ function EnhancedAttendanceCamera() {
           {/* Stats */}
           <Card sx={{ mb: 2 }}>
             <CardContent>
-              <Typography variant="h6" gutterBottom>
-                Thống kê buổi học
-              </Typography>
+              <Typography variant="h6" gutterBottom>{t('enhancedAttendanceCamera.statTitle')}</Typography>
               
               <Grid container spacing={2}>
                 <Grid item xs={4}>
@@ -496,7 +511,7 @@ function EnhancedAttendanceCamera() {
                       {sessionStats.total}
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
-                      Tổng
+                      {t('enhancedAttendanceCamera.total')}
                     </Typography>
                   </Box>
                 </Grid>
@@ -507,7 +522,7 @@ function EnhancedAttendanceCamera() {
                       {sessionStats.onTime}
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
-                      Đúng giờ
+                      {t('enhancedAttendanceCamera.onTime')}
                     </Typography>
                   </Box>
                 </Grid>
@@ -518,7 +533,7 @@ function EnhancedAttendanceCamera() {
                       {sessionStats.late}
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
-                      Trễ
+                      {t('enhancedAttendanceCamera.late')}
                     </Typography>
                   </Box>
                 </Grid>
@@ -529,16 +544,12 @@ function EnhancedAttendanceCamera() {
           {/* Recent Attendance */}
           <Card>
             <CardContent>
-              <Typography variant="h6" gutterBottom>
-                Danh sách điểm danh
-              </Typography>
+              <Typography variant="h6" gutterBottom>{t('enhancedAttendanceCamera.attendanceListTitle')}</Typography>
 
               {recentAttendance.length === 0 ? (
                 <Box sx={{ textAlign: 'center', py: 4 }}>
                   <PersonIcon sx={{ fontSize: 60, color: 'text.secondary', mb: 2 }} />
-                  <Typography color="text.secondary">
-                    Chưa có sinh viên nào điểm danh
-                  </Typography>
+                  <Typography color="text.secondary">{t('enhancedAttendanceCamera.emptyAttendance')}</Typography>
                 </Box>
               ) : (
                 <List sx={{ maxHeight: 500, overflow: 'auto' }}>
@@ -579,7 +590,7 @@ function EnhancedAttendanceCamera() {
                                 sx={{ mt: 0.5, mr: 1 }}
                               />
                               <Typography component="span" variant="caption" color="text.secondary">
-                                {new Date(item.thoi_gian_quet).toLocaleTimeString('vi-VN')}
+                                {new Date(item.thoi_gian_quet).toLocaleTimeString(dateTimeLocale)}
                               </Typography>
                             </>
                           }

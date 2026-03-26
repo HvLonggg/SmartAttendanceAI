@@ -3,6 +3,7 @@ import { Box, Button, Card, CardContent, TextField, Typography, Alert, Stack } f
 import { useLocation, useNavigate } from 'react-router-dom';
 import AuthLayout from '../../layouts/AuthLayout';
 import { authAPI } from '../../services/api';
+import { formatApiError } from '../../utils/apiError';
 
 export default function VerifyOtpPage() {
   const navigate = useNavigate();
@@ -40,7 +41,7 @@ export default function VerifyOtpPage() {
       setResendMessage(data.message || 'Đã gửi lại mã OTP.');
       if (data.dev_otp) setDevOtp(data.dev_otp);
     } catch (err) {
-      setError(err.response?.data?.detail || 'Không gửi lại OTP được');
+      setError(formatApiError(err.response?.data?.detail, 'Không gửi lại OTP được'));
     } finally {
       setResendBusy(false);
     }
@@ -58,7 +59,7 @@ export default function VerifyOtpPage() {
       await authAPI.verifyOtp({ username: effectiveUsername, otp, purpose });
       navigate('/auth/login');
     } catch (err) {
-      setError(err.response?.data?.detail || 'OTP không đúng');
+      setError(formatApiError(err.response?.data?.detail, 'OTP không đúng'));
     } finally {
       setBusy(false);
     }
