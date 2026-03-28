@@ -26,6 +26,7 @@ import EditIcon from '@mui/icons-material/Edit';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { teacherAPI } from '../../services/api';
 import { formatApiError } from '../../utils/apiError';
+import { isSessionScanCodeValid } from '../../utils/sessionScanCode';
 import { useI18n } from '../../i18n/I18nContext';
 
 export default function TeacherSessionsPage() {
@@ -70,15 +71,22 @@ export default function TeacherSessionsPage() {
   const onCreate = async (e) => {
     e.preventDefault();
     setOk(null);
+    setError(null);
+    if (!isSessionScanCodeValid(maXacThuc)) {
+      setError(t('teacherSessionsPage.invalidScanCode'));
+      return;
+    }
     setSaving(true);
     try {
+      const pd = parseInt(String(phutDung), 10);
+      const pm = parseInt(String(phutMax), 10);
       await teacherAPI.createSession({
         ma_lhp: maLhp,
         ngay_hoc: ngayHoc,
         gio_bat_dau: gioBatDau,
         ma_xac_thuc_buoi: maXacThuc.trim(),
-        phut_het_han_dung_gio: Number(phutDung),
-        phut_het_han_diem_danh: Number(phutMax),
+        phut_het_han_dung_gio: Number.isFinite(pd) && pd > 0 ? pd : 15,
+        phut_het_han_diem_danh: Number.isFinite(pm) && pm > 0 ? pm : 60,
       });
       setOk(t('teacherSessionsPage.createOk'));
       setMaXacThuc('');
@@ -97,6 +105,13 @@ export default function TeacherSessionsPage() {
 
   const saveEdit = async () => {
     if (!editRow) return;
+    setError(null);
+    if (editRow.ma_xac_thuc_buoi != null && String(editRow.ma_xac_thuc_buoi).trim() !== '') {
+      if (!isSessionScanCodeValid(editRow.ma_xac_thuc_buoi)) {
+        setError(t('teacherSessionsPage.invalidScanCode'));
+        return;
+      }
+    }
     try {
       await teacherAPI.updateSession(editRow.ma_buoi, {
         ngay_hoc: editRow.ngay_hoc,

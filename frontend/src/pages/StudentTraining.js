@@ -350,7 +350,7 @@ function StudentTraining() {
     return (
       <Box sx={{ p: 2 }}>
         <Alert severity="warning" sx={{ mb: 2 }}>
-          Student chỉ có thể huấn luyện nhận diện cho tài khoản của mình.
+          Sinh viên chỉ được huấn luyện nhận diện cho chính mã sinh viên của tài khoản này.
         </Alert>
         <Button onClick={() => navigate('/student/profile')} variant="outlined">
           Về hồ sơ của tôi

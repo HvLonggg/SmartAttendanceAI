@@ -31,6 +31,8 @@ import {
   AccountCircle as AccountCircleIcon,
   WorkHistory as WorkHistoryIcon,
   AssignmentInd as AssignmentIndIcon,
+  Face as FaceIcon,
+  AppRegistration as AppRegistrationIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../../auth/AuthContext';
 import AuthUserAvatar from '../AuthUserAvatar';
@@ -73,6 +75,12 @@ const teacherMenuSpec = [
 
 const studentMenuSpec = [
   { tKey: 'nav.studentHome', Icon: HomeIcon, path: '/student', match: (p) => p === '/student' },
+  {
+    tKey: 'nav.studentCatalog',
+    Icon: AppRegistrationIcon,
+    path: '/student/catalog',
+    match: (p) => p === '/student/catalog' || p.startsWith('/student/catalog/'),
+  },
   {
     tKey: 'nav.studentAttendance',
     Icon: CameraIcon,
@@ -117,10 +125,26 @@ function MainLayout() {
 
   const role = user?.role;
   const visibleMenuSpec = useMemo(() => {
-    if (role === 'STUDENT') return studentMenuSpec;
+    if (role === 'STUDENT') {
+      const ma = (user?.ma_sv || '').trim();
+      const trainingItem = ma
+        ? {
+            tKey: 'nav.studentTraining',
+            Icon: FaceIcon,
+            path: `/students/${encodeURIComponent(ma)}/training`,
+            match: (p) => /\/students\/[^/]+\/training\/?$/.test(p),
+          }
+        : null;
+      if (!trainingItem) return studentMenuSpec;
+      const items = [...studentMenuSpec];
+      const idx = items.findIndex((i) => i.path === '/student/profile');
+      if (idx >= 0) items.splice(idx, 0, trainingItem);
+      else items.push(trainingItem);
+      return items;
+    }
     if (role === 'TEACHER') return teacherMenuSpec;
     return adminMenuSpec;
-  }, [role]);
+  }, [role, user?.ma_sv]);
 
   const roleLabel = role ? t(`role.${role}`) || role : '';
 

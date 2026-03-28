@@ -54,7 +54,7 @@ function StatCard({ title, value, icon, color }) {
             <Typography color="text.secondary" gutterBottom variant="body2">
               {title}
             </Typography>
-            <Typography variant="h4" component="div" color="text.primary">
+            <Typography variant="h4" component="div" color="text.primary" fontWeight="bold">
               {value}
             </Typography>
           </Box>
@@ -186,7 +186,7 @@ function Dashboard() {
 
     return (
       <Box>
-        <Typography variant="h4" gutterBottom fontWeight="bold" color="text.primary">
+        <Typography variant="h4" fontWeight="bold" gutterBottom color="text.primary">
           Tổng quan quản trị học phần
         </Typography>
 
@@ -209,7 +209,7 @@ function Dashboard() {
           <Grid item xs={12} md={7}>
             <Card>
               <CardContent>
-                <Typography variant="h6" gutterBottom color="text.primary">
+                <Typography variant="h6" fontWeight="bold" gutterBottom color="text.primary">
                   Giảng viên được phân công nhiều/ít
                 </Typography>
                 <ResponsiveContainer width="100%" height={300}>
@@ -229,7 +229,7 @@ function Dashboard() {
           <Grid item xs={12} md={5}>
             <Card>
               <CardContent>
-                <Typography variant="h6" gutterBottom color="text.primary">
+                <Typography variant="h6" fontWeight="bold" gutterBottom color="text.primary">
                   Thông báo tổng quan
                 </Typography>
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
@@ -250,7 +250,7 @@ function Dashboard() {
           <Grid item xs={12}>
             <Card>
               <CardContent>
-                <Typography variant="h6" gutterBottom color="text.primary">
+                <Typography variant="h6" fontWeight="bold" gutterBottom color="text.primary">
                   Dữ liệu điểm danh theo từng học phần đã phân công
                 </Typography>
                 <Table size="small">
@@ -267,9 +267,11 @@ function Dashboard() {
                   </TableHead>
                   <TableBody>
                     {byClass.map((r) => (
-                      <TableRow key={r.ma_lhp}>
-                        <TableCell sx={{ fontWeight: 700 }}>{r.ma_lhp}</TableCell>
-                        <TableCell>{r.ten_mon || '—'}</TableCell>
+                      <TableRow key={r.ma_lhp} hover>
+                        <TableCell>{r.ma_lhp}</TableCell>
+                        <TableCell>
+                          <Typography fontWeight={500}>{r.ten_mon || '—'}</Typography>
+                        </TableCell>
                         <TableCell>{r.ten_giang_vien ? `${r.ten_giang_vien} (${r.ma_gv || '—'})` : '—'}</TableCell>
                         <TableCell align="right">{r.so_buoi || 0}</TableCell>
                         <TableCell align="right">{r.luot_diem_danh || 0}</TableCell>
@@ -296,7 +298,11 @@ function Dashboard() {
         </Grid>
 
         <Dialog open={detailOpen} onClose={() => setDetailOpen(false)} maxWidth="lg" fullWidth>
-          <DialogTitle>Chi tiết học phần {selectedClassDetail?.ma_lhp || ''}</DialogTitle>
+          <DialogTitle>
+            <Typography variant="h6" component="span">
+              Chi tiết học phần {selectedClassDetail?.ma_lhp || ''}
+            </Typography>
+          </DialogTitle>
           <DialogContent dividers>
             {detailLoading && <CircularProgress size={22} />}
             {detailError && <Alert severity="error">{detailError}</Alert>}
@@ -309,7 +315,9 @@ function Dashboard() {
                   {selectedClassDetail.summary?.late_count || 0}
                 </Alert>
 
-                <Typography variant="subtitle1" fontWeight={700}>Danh sách buổi học giảng viên đã tạo</Typography>
+                <Typography variant="subtitle1" fontWeight="bold">
+                  Danh sách buổi học giảng viên đã tạo
+                </Typography>
                 <Table size="small">
                   <TableHead>
                     <TableRow>
@@ -335,7 +343,9 @@ function Dashboard() {
                   </TableBody>
                 </Table>
 
-                <Typography variant="subtitle1" fontWeight={700}>Sinh viên đã điểm danh học phần này</Typography>
+                <Typography variant="subtitle1" fontWeight="bold">
+                  Sinh viên đã điểm danh học phần này
+                </Typography>
                 <Table size="small">
                   <TableHead>
                     <TableRow>
@@ -416,7 +426,7 @@ function Dashboard() {
         <Grid item xs={12} md={7}>
           <Card>
             <CardContent>
-              <Typography variant="h6" gutterBottom color="text.primary">
+              <Typography variant="h6" fontWeight="bold" gutterBottom color="text.primary">
                 {t('dashboard.weekAttendance')}
               </Typography>
               <ResponsiveContainer width="100%" height={300}>
@@ -437,7 +447,7 @@ function Dashboard() {
         <Grid item xs={12} md={5}>
           <Card>
             <CardContent>
-              <Typography variant="h6" gutterBottom color="text.primary">
+              <Typography variant="h6" fontWeight="bold" gutterBottom color="text.primary">
                 {t('dashboard.statusDist')}
               </Typography>
               <ResponsiveContainer width="100%" height={300}>
@@ -466,7 +476,7 @@ function Dashboard() {
         <Grid item xs={12}>
           <Card>
             <CardContent>
-              <Typography variant="h6" gutterBottom color="text.primary">
+              <Typography variant="h6" fontWeight="bold" gutterBottom color="text.primary">
                 {t('dashboard.alerts')}
               </Typography>
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>

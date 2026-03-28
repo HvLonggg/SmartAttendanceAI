@@ -17,6 +17,7 @@ import MenuBookIcon from '@mui/icons-material/MenuBook';
 import PersonIcon from '@mui/icons-material/Person';
 import RateReviewIcon from '@mui/icons-material/RateReview';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
+import AppRegistrationIcon from '@mui/icons-material/AppRegistration';
 import { studentPortalAPI, analyticsAPI } from '../../services/api';
 import { useAuth } from '../../auth/AuthContext';
 import { formatApiError } from '../../utils/apiError';
@@ -88,6 +89,13 @@ export default function StudentPortalHome() {
   }
 
   const tiles = [
+    {
+      title: t('studentPortalHome.tiles.catalog'),
+      sub: t('studentPortalHome.tiles.catalogSub'),
+      icon: <AppRegistrationIcon sx={{ fontSize: 40, color: '#fff' }} />,
+      path: '/student/catalog',
+      grad: 'linear-gradient(135deg, #0d9488 0%, #2563eb 100%)',
+    },
     {
       title: t('studentPortalHome.tiles.sessions'),
       sub: t('studentPortalHome.tiles.sessionsSub', { count: todaySessions.length }),

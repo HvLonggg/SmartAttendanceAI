@@ -11,8 +11,17 @@ import {
   Chip,
   Avatar,
   Divider,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Paper,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import AppRegistrationIcon from '@mui/icons-material/AppRegistration';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import SchoolIcon from '@mui/icons-material/School';
 import EmailIcon from '@mui/icons-material/Email';
 import PhoneIcon from '@mui/icons-material/Phone';
@@ -27,8 +36,11 @@ export default function StudentCoursesPage({ compact = false, maxItems = null })
   const { t } = useI18n();
   const [courses, setCourses] = useState([]);
   const [analytics, setAnalytics] = useState([]);
+  const [openClasses, setOpenClasses] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [openLoading, setOpenLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [openError, setOpenError] = useState(null);
 
   useEffect(() => {
     let ok = true;
@@ -55,6 +67,33 @@ export default function StudentCoursesPage({ compact = false, maxItems = null })
     };
   }, [user?.ma_sv]);
 
+  useEffect(() => {
+    if (compact) {
+      setOpenClasses([]);
+      setOpenError(null);
+      return undefined;
+    }
+    let ok = true;
+    (async () => {
+      setOpenLoading(true);
+      setOpenError(null);
+      try {
+        const { data } = await studentPortalAPI.listOpenClasses();
+        if (!ok) return;
+        setOpenClasses(data || []);
+      } catch (e) {
+        if (!ok) return;
+        setOpenClasses([]);
+        setOpenError(formatApiError(e.response?.data?.detail, t('studentCoursesPage.openLoadFail')));
+      } finally {
+        if (ok) setOpenLoading(false);
+      }
+    })();
+    return () => {
+      ok = false;
+    };
+  }, [compact, user?.ma_sv]);
+
   const rateByLhp = useMemo(() => {
     const m = {};
     (analytics || []).forEach((a) => {
@@ -73,9 +112,18 @@ export default function StudentCoursesPage({ compact = false, maxItems = null })
     <Box>
       {!compact && (
         <>
-          <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/student')} sx={{ mb: 2 }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center', mb: 2 }}>
+            <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/student')}>
               {t('studentCoursesPage.back')}
-          </Button>
+            </Button>
+            <Button
+              variant="contained"
+              startIcon={<AppRegistrationIcon />}
+              onClick={() => navigate('/student/catalog')}
+            >
+              {t('studentCoursesPage.registerMore')}
+            </Button>
+          </Box>
           <Typography
             variant="h4"
             fontWeight={900}
@@ -97,7 +145,13 @@ export default function StudentCoursesPage({ compact = false, maxItems = null })
           <CircularProgress />
         </Box>
       ) : (
-        <Grid container spacing={2}>
+        <>
+          {!compact && displayCourses.length > 0 && (
+            <Typography variant="h6" fontWeight={800} sx={{ mb: 1.5 }}>
+              {t('studentCoursesPage.enrolledSection')}
+            </Typography>
+          )}
+          <Grid container spacing={2}>
           {displayCourses.map((c, idx) => {
             const stat = rateByLhp[c.ma_lhp];
             const grad = ['linear-gradient(135deg,#6366f1,#8b5cf6)', 'linear-gradient(135deg,#ec4899,#f97316)', 'linear-gradient(135deg,#0d9488,#2563eb)'][idx % 3];
@@ -185,10 +239,107 @@ export default function StudentCoursesPage({ compact = false, maxItems = null })
           })}
           {!displayCourses.length && (
             <Grid item xs={12}>
-              <Alert severity="info">{t('studentCoursesPage.empty')}</Alert>
+              <Alert severity="info">
+                <Typography variant="body2" fontWeight={600} gutterBottom>
+                  {t('studentCoursesPage.empty')}
+                </Typography>
+                {!compact && (
+                  <Typography variant="body2">{t('studentCoursesPage.emptyHint')}</Typography>
+                )}
+              </Alert>
             </Grid>
           )}
         </Grid>
+
+          {!compact && (
+            <Box sx={{ mt: 4 }}>
+              <Divider sx={{ mb: 3 }} />
+              <Typography variant="h5" fontWeight={900} gutterBottom>
+                {t('studentCoursesPage.openSectionTitle')}
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                {t('studentCoursesPage.openSectionSubtitle')}
+              </Typography>
+              {openError && (
+                <Alert severity="warning" sx={{ mb: 2 }}>
+                  {openError}
+                </Alert>
+              )}
+              {openLoading ? (
+                <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+                  <CircularProgress size={32} />
+                </Box>
+              ) : (
+                <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 2 }}>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow sx={{ bgcolor: 'action.hover' }}>
+                        <TableCell sx={{ fontWeight: 800 }}>{t('studentCoursesPage.colOpenCode')}</TableCell>
+                        <TableCell sx={{ fontWeight: 800 }}>{t('studentCoursesPage.colOpenCourse')}</TableCell>
+                        <TableCell sx={{ fontWeight: 800 }}>{t('studentCoursesPage.colOpenTeacher')}</TableCell>
+                        <TableCell sx={{ fontWeight: 800 }}>{t('studentCoursesPage.colOpenStatus')}</TableCell>
+                        <TableCell align="right" sx={{ fontWeight: 800 }}>
+                          {t('studentCoursesPage.colOpenAction')}
+                        </TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {openClasses.map((r) => (
+                        <TableRow key={r.ma_lhp} hover>
+                          <TableCell>
+                            <Typography variant="body2" fontWeight={700}>
+                              {r.ma_lhp}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {r.ma_mon}
+                            </Typography>
+                          </TableCell>
+                          <TableCell>{r.ten_mon}</TableCell>
+                          <TableCell>
+                            {r.du_dieu_kien_dang_ky ? (
+                              <Typography variant="body2">{r.giang_vien}</Typography>
+                            ) : (
+                              <Typography variant="body2" color="warning.main" fontWeight={700}>
+                                {t('studentCoursesPage.notAssignedYet')}
+                              </Typography>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {r.du_dieu_kien_dang_ky ? (
+                              <Chip size="small" color="success" label={t('studentCoursesPage.statusCanEnroll')} />
+                            ) : (
+                              <Chip size="small" color="warning" label={t('studentCoursesPage.statusWaitTeacher')} />
+                            )}
+                          </TableCell>
+                          <TableCell align="right">
+                            <Button
+                              size="small"
+                              endIcon={<ChevronRightIcon />}
+                              onClick={() =>
+                                navigate(
+                                  `/student/catalog/${encodeURIComponent(String(r.ma_lhp || '').trim())}`
+                                )
+                              }
+                            >
+                              {t('studentCoursesPage.viewOpenDetail')}
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      {!openClasses.length && (
+                        <TableRow>
+                          <TableCell colSpan={5}>
+                            <Alert severity="info">{t('studentCoursesPage.openEmpty')}</Alert>
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              )}
+            </Box>
+          )}
+        </>
       )}
     </Box>
   );

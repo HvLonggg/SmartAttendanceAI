@@ -107,6 +107,10 @@ class StudentFeedbackCreate(BaseModel):
     ma_lhp: Optional[str] = None
 
 
+class StudentEnrollPayload(BaseModel):
+    ma_lhp: str
+
+
 class TeacherAssignPayload(BaseModel):
     ma_gv: Optional[str] = None
 
@@ -193,6 +197,82 @@ def _student_ma_sv_from_auth(current: dict) -> str:
     if not ma:
         raise HTTPException(status_code=400, detail="Tài khoản chưa gắn mã sinh viên (MaSV). Liên hệ quản trị.")
     return ma
+
+
+def _lhp_table_columns(cursor) -> set:
+    cursor.execute(
+        """
+        SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = N'dbo' AND TABLE_NAME = N'LopHocPhan'
+        """
+    )
+    return {r[0] for r in cursor.fetchall()}
+
+
+def _lhp_catalog_extra_select(cols: set) -> str:
+    def piece(name: str, sql_null: str) -> str:
+        return f"lhp.[{name}] AS [{name}]" if name in cols else f"CAST(NULL AS {sql_null}) AS [{name}]"
+
+    return ", ".join(
+        [
+            piece("NamHoc", "NVARCHAR(30)"),
+            piece("HocKy", "INT"),
+            piece("PhongHoc", "NVARCHAR(50)"),
+            piece("MaKhoa", "NVARCHAR(20)"),
+        ]
+    )
+
+
+def _catalog_dict_from_row(row) -> dict:
+    (
+        ma_lhp,
+        ma_mon,
+        ten_mon,
+        gv_text,
+        ma_gv_lhp,
+        gv_hoten,
+        gv_email,
+        gv_dt,
+        nam_hoc,
+        hoc_ky,
+        phong_hoc,
+        ma_khoa_lhp,
+    ) = row
+    ten_gv = (gv_hoten or "").strip() or (gv_text or "").strip() or "—"
+    ma_gv = (ma_gv_lhp or "").strip() or None
+    nh = nam_hoc
+    if nh is not None and not isinstance(nh, str):
+        nh = str(nh)
+    nh = (nh or "").strip() or None
+    ph = phong_hoc
+    if ph is not None and not isinstance(ph, str):
+        ph = str(ph)
+    ph = (ph or "").strip() or None
+    mk = ma_khoa_lhp
+    if mk is not None and not isinstance(mk, str):
+        mk = str(mk)
+    mk = (mk or "").strip() or None
+    hk = None
+    if hoc_ky is not None:
+        try:
+            hk = int(hoc_ky)
+        except (TypeError, ValueError):
+            hk = None
+    return {
+        "ma_lhp": ma_lhp,
+        "ma_mon": ma_mon,
+        "ten_mon": ten_mon,
+        "giang_vien": ten_gv,
+        "ma_gv": ma_gv,
+        "gv_email": (gv_email or "").strip() or None,
+        "gv_dien_thoai": (gv_dt or "").strip() or None,
+        "ghi_chu_gv": (gv_text or "").strip() or None,
+        "nam_hoc": nh,
+        "hoc_ky": hk,
+        "phong_hoc": ph,
+        "ma_khoa": mk,
+        "du_dieu_kien_dang_ky": bool(ma_gv),
+    }
 
 
 # ==================== AI FUNCTIONS ====================
@@ -1098,6 +1178,172 @@ async def student_my_enrollments(current=Depends(require_role("STUDENT"))):
         conn.close()
 
 
+@app.get("/api/student/catalog/classes")
+async def student_catalog_open_classes(current=Depends(require_role("STUDENT"))):
+    """Lớp học phần chưa đăng ký — sinh viên có thể xem và đăng ký (khi đã phân công GV)."""
+    ma_sv = _student_ma_sv_from_auth(current)
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        extras = _lhp_catalog_extra_select(_lhp_table_columns(cursor))
+        cursor.execute(
+            f"""
+            SELECT
+                lhp.MaLHP,
+                mh.MaMon,
+                mh.TenMon,
+                lhp.GiangVien,
+                lhp.MaGV,
+                gv.HoTen,
+                gv.Email,
+                gv.DienThoai,
+                {extras}
+            FROM dbo.LopHocPhan lhp
+            INNER JOIN dbo.MonHoc mh ON lhp.MaMon = mh.MaMon
+            LEFT JOIN dbo.GiangVien gv
+                ON lhp.MaGV IS NOT NULL
+                AND LTRIM(RTRIM(lhp.MaGV)) = LTRIM(RTRIM(gv.MaGV))
+            LEFT JOIN dbo.DangKyHoc dk
+                ON dk.MaLHP = lhp.MaLHP AND dk.MaSV = ?
+            WHERE dk.MaSV IS NULL
+            ORDER BY lhp.MaLHP
+            """,
+            (ma_sv,),
+        )
+        return [_catalog_dict_from_row(r) for r in cursor.fetchall()]
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.get("/api/student/catalog/classes/{ma_lhp}")
+async def student_catalog_class_detail(ma_lhp: str, current=Depends(require_role("STUDENT"))):
+    ma_sv = _student_ma_sv_from_auth(current)
+    key = (ma_lhp or "").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="Thiếu mã lớp học phần")
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        extras = _lhp_catalog_extra_select(_lhp_table_columns(cursor))
+        cursor.execute(
+            f"""
+            SELECT
+                lhp.MaLHP,
+                mh.MaMon,
+                mh.TenMon,
+                lhp.GiangVien,
+                lhp.MaGV,
+                gv.HoTen,
+                gv.Email,
+                gv.DienThoai,
+                {extras}
+            FROM dbo.LopHocPhan lhp
+            INNER JOIN dbo.MonHoc mh ON lhp.MaMon = mh.MaMon
+            LEFT JOIN dbo.GiangVien gv
+                ON lhp.MaGV IS NOT NULL
+                AND LTRIM(RTRIM(lhp.MaGV)) = LTRIM(RTRIM(gv.MaGV))
+            WHERE LTRIM(RTRIM(lhp.MaLHP)) = LTRIM(RTRIM(?))
+            """,
+            (key,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Không tìm thấy lớp học phần")
+        cursor.execute(
+            "SELECT COUNT(*) FROM dbo.DangKyHoc WHERE MaSV = ? AND LTRIM(RTRIM(MaLHP)) = LTRIM(RTRIM(?))",
+            (ma_sv, key),
+        )
+        enrolled = int(cursor.fetchone()[0] or 0) > 0
+        data = _catalog_dict_from_row(row)
+        data["da_dang_ky"] = enrolled
+        return data
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.post("/api/student/me/enrollments")
+async def student_enroll_class(body: StudentEnrollPayload, current=Depends(require_role("STUDENT"))):
+    ma_sv = _student_ma_sv_from_auth(current)
+    key = (body.ma_lhp or "").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="Thiếu mã lớp học phần")
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        extras = _lhp_catalog_extra_select(_lhp_table_columns(cursor))
+        cursor.execute(
+            f"""
+            SELECT
+                lhp.MaLHP,
+                mh.MaMon,
+                mh.TenMon,
+                lhp.GiangVien,
+                lhp.MaGV,
+                gv.HoTen,
+                gv.Email,
+                gv.DienThoai,
+                {extras}
+            FROM dbo.LopHocPhan lhp
+            INNER JOIN dbo.MonHoc mh ON lhp.MaMon = mh.MaMon
+            LEFT JOIN dbo.GiangVien gv
+                ON lhp.MaGV IS NOT NULL
+                AND LTRIM(RTRIM(lhp.MaGV)) = LTRIM(RTRIM(gv.MaGV))
+            WHERE LTRIM(RTRIM(lhp.MaLHP)) = LTRIM(RTRIM(?))
+            """,
+            (key,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Không tìm thấy lớp học phần")
+        meta = _catalog_dict_from_row(row)
+        if not meta.get("du_dieu_kien_dang_ky"):
+            raise HTTPException(
+                status_code=400,
+                detail="Lớp học phần chưa được phân công giảng viên. Vui lòng đợi phòng đào tạo hoàn tất.",
+            )
+        cursor.execute(
+            "SELECT COUNT(*) FROM dbo.DangKyHoc WHERE MaSV = ? AND LTRIM(RTRIM(MaLHP)) = LTRIM(RTRIM(?))",
+            (ma_sv, key),
+        )
+        if int(cursor.fetchone()[0] or 0) > 0:
+            raise HTTPException(status_code=409, detail="Bạn đã đăng ký lớp học phần này")
+
+        cursor.execute(
+            """
+            SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = N'dbo' AND TABLE_NAME = N'DangKyHoc'
+            """
+        )
+        dk_cols = {r[0] for r in cursor.fetchall()}
+        if not {"MaSV", "MaLHP"}.issubset(dk_cols):
+            raise HTTPException(status_code=500, detail="Bảng DangKyHoc thiếu cột MaSV hoặc MaLHP")
+        cursor.execute(
+            "INSERT INTO dbo.DangKyHoc (MaSV, MaLHP) VALUES (?, ?)",
+            (ma_sv, row[0]),
+        )
+        conn.commit()
+        return {
+            "success": True,
+            "message": "Đăng ký học phần thành công",
+            "ma_lhp": row[0],
+            "ten_mon": meta.get("ten_mon"),
+            "giang_vien": meta.get("giang_vien"),
+        }
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as e:
+        conn.rollback()
+        if "UNIQUE" in str(e).upper() or "duplicate" in str(e).lower():
+            raise HTTPException(status_code=409, detail="Bạn đã đăng ký lớp học phần này") from e
+        raise HTTPException(status_code=500, detail=f"Không thể ghi đăng ký: {e!s}") from e
+    finally:
+        cursor.close()
+        conn.close()
+
+
 @app.get("/api/student/me/sessions")
 async def student_my_sessions(limit: int = 300, current=Depends(require_role("STUDENT"))):
     """Buổi học thuộc các lớp học phần sinh viên đã đăng ký."""
@@ -1155,37 +1401,47 @@ async def student_update_own_profile(
     body: StudentSelfProfileUpdate,
     current=Depends(require_role("STUDENT")),
 ):
-    """Sinh viên cập nhật họ tên / email trên bảng SinhVien (không đổi MaSV)."""
+    """Sinh viên chỉ được sửa họ tên và email trên SinhVien; đồng bộ họ tên sang NguoiDung."""
     ma_sv = _student_ma_sv_from_auth(current)
-    if body.ho_ten is None and body.email is None:
+    uid = current.get("uid")
+    if hasattr(body, "model_dump"):
+        updates = body.model_dump(exclude_unset=True)
+    else:
+        updates = body.dict(exclude_unset=True)
+    if not updates:
         raise HTTPException(status_code=400, detail="Không có trường nào để cập nhật")
 
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT HoTen, Email FROM SinhVien WHERE MaSV = ?", (ma_sv,))
+    cursor.execute("SELECT HoTen, Email FROM dbo.SinhVien WHERE MaSV = ?", (ma_sv,))
     row = cursor.fetchone()
     if not row:
         cursor.close()
         conn.close()
         raise HTTPException(status_code=404, detail="Không tìm thấy sinh viên trong CSDL")
 
-    if body.ho_ten is not None:
-        ho_ten = body.ho_ten.strip()
-        if not ho_ten:
+    ho_ten = row[0]
+    email = row[1]
+
+    if "ho_ten" in updates:
+        ht = (updates.get("ho_ten") or "").strip()
+        if not ht:
             cursor.close()
             conn.close()
             raise HTTPException(status_code=400, detail="Họ tên không hợp lệ")
-    else:
-        ho_ten = row[0]
-    if body.email is not None:
-        email = body.email.strip()
-    else:
-        email = row[1]
+        ho_ten = ht
+    if "email" in updates:
+        email = (updates.get("email") or "").strip() or None
 
     cursor.execute(
-        "UPDATE SinhVien SET HoTen = ?, Email = ? WHERE MaSV = ?",
+        "UPDATE dbo.SinhVien SET HoTen = ?, Email = ? WHERE MaSV = ?",
         (ho_ten, email, ma_sv),
     )
+    if "ho_ten" in updates and uid:
+        cursor.execute(
+            "UPDATE dbo.NguoiDung SET HoTen = ?, UpdatedAt = SYSUTCDATETIME() WHERE Id = ?",
+            (ho_ten, uid),
+        )
     conn.commit()
     cursor.close()
     conn.close()

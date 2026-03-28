@@ -25,6 +25,8 @@ import AdminClassCreationPage from './pages/admin/AdminClassCreationPage';
 import StudentPortalHome from './pages/student/StudentPortalHome';
 import StudentSessionsPage from './pages/student/StudentSessionsPage';
 import StudentCoursesPage from './pages/student/StudentCoursesPage';
+import StudentCatalogPage from './pages/student/StudentCatalogPage';
+import StudentClassEnrollPage from './pages/student/StudentClassEnrollPage';
 import StudentFeedbackPage from './pages/student/StudentFeedbackPage';
 import StudentProfilePage from './pages/student/StudentProfilePage';
 import StudentAttendancePage from './pages/student/StudentAttendancePage';
@@ -57,6 +59,7 @@ function App() {
                   {/* Protected */}
                   <Route element={<RequireAuth roles={['ADMIN', 'TEACHER', 'STUDENT']} />}>
                     <Route path="dashboard" element={<Dashboard />} />
+                    <Route path="students/:maSV/training" element={<StudentTraining />} />
                     <Route path="students/:maSV" element={<StudentDetail />} />
                     <Route path="settings" element={<SettingsPage />} />
 
@@ -65,6 +68,8 @@ function App() {
                       <Route path="student" element={<StudentPortalHome />} />
                       <Route path="student/attendance" element={<StudentAttendancePage />} />
                       <Route path="student/sessions" element={<StudentSessionsPage />} />
+                      <Route path="student/catalog" element={<StudentCatalogPage />} />
+                      <Route path="student/catalog/:maLhp" element={<StudentClassEnrollPage />} />
                       <Route path="student/courses" element={<StudentCoursesPage />} />
                       <Route path="student/feedback" element={<StudentFeedbackPage />} />
                       <Route path="student/profile" element={<StudentProfilePage />} />
@@ -75,10 +80,9 @@ function App() {
                       <Route path="students" element={<StudentList />} />
                     </Route>
 
-                    {/* Admin — quản lý buổi toàn hệ thống + huấn luyện khuôn mặt */}
+                    {/* Admin — quản lý buổi toàn hệ thống */}
                     <Route element={<RequireAuth roles={['ADMIN']} />}>
                       <Route path="sessions" element={<SessionManagement />} />
-                      <Route path="students/:maSV/training" element={<StudentTraining />} />
                     </Route>
 
                     {/* Giảng viên — đăng ký buổi học & hồ sơ */}

@@ -5,7 +5,7 @@ from datetime import datetime, date, time, timedelta
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 
 from database.db_connection import get_connection
 from auth_routes import require_role
@@ -87,13 +87,35 @@ def ensure_buoi_hoc_extra_columns() -> None:
         conn.close()
 
 
+def _ma_xac_thuc_buoi_format_ok(s: str) -> bool:
+    """Phần đầu là chữ cái (Unicode), phần sau chỉ là số; tổng 4–64 ký tự (VD: HL0234)."""
+    if len(s) < 4 or len(s) > 64:
+        return False
+    i = 0
+    n = len(s)
+    while i < n and s[i].isalpha():
+        i += 1
+    if i == 0 or i >= n:
+        return False
+    return s[i:].isdigit()
+
+
 class TeacherSessionCreate(BaseModel):
     ma_lhp: str
     ngay_hoc: date
     gio_bat_dau: str  # "HH:MM" hoặc "HH:MM:SS"
-    ma_xac_thuc_buoi: str = Field(..., min_length=4, max_length=64)
+    ma_xac_thuc_buoi: str = Field(..., max_length=64)
     phut_het_han_dung_gio: int = Field(15, ge=1, le=120)
     phut_het_han_diem_danh: int = Field(60, ge=1, le=600)
+
+    @validator("ma_xac_thuc_buoi")
+    def validate_ma_xac_thuc_buoi(cls, v: str) -> str:
+        s = (v or "").strip()
+        if not _ma_xac_thuc_buoi_format_ok(s):
+            raise ValueError(
+                "Mã buổi học: phần đầu là chữ cái, phần sau chỉ là số; tối thiểu 4 ký tự, tối đa 64 (VD: HL0234)."
+            )
+        return s
 
 
 class TeacherSessionUpdate(BaseModel):
@@ -102,6 +124,17 @@ class TeacherSessionUpdate(BaseModel):
     ma_xac_thuc_buoi: Optional[str] = None
     phut_het_han_dung_gio: Optional[int] = None
     phut_het_han_diem_danh: Optional[int] = None
+
+    @validator("ma_xac_thuc_buoi")
+    def validate_ma_xac_thuc_buoi_patch(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        s = v.strip()
+        if not _ma_xac_thuc_buoi_format_ok(s):
+            raise ValueError(
+                "Mã buổi học: phần đầu là chữ cái, phần sau chỉ là số; tối thiểu 4 ký tự (VD: HL0234)."
+            )
+        return s
 
 
 def _parse_time(s: str) -> time:
@@ -344,9 +377,7 @@ async def teacher_list_sessions(current=Depends(require_role("TEACHER")), limit:
 async def teacher_create_session(body: TeacherSessionCreate, current=Depends(require_role("TEACHER"))):
     ma_gv = _ma_gv_from_auth(current)
     ma_lhp = body.ma_lhp.strip()
-    code = body.ma_xac_thuc_buoi.strip()
-    if not code:
-        raise HTTPException(status_code=400, detail="Mã xác thực buổi học không được trống")
+    code = body.ma_xac_thuc_buoi
 
     gio = _parse_time(body.gio_bat_dau)
 
@@ -366,6 +397,7 @@ async def teacher_create_session(body: TeacherSessionCreate, current=Depends(req
         cur.execute(
             """
             INSERT INTO dbo.BuoiHoc (MaLHP, NgayHoc, GioBatDau, MaXacThucBuoi, PhutHetHanDungGio, PhutHetHanDiemDanh)
+            OUTPUT INSERTED.MaBuoi
             VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
@@ -377,8 +409,15 @@ async def teacher_create_session(body: TeacherSessionCreate, current=Depends(req
                 body.phut_het_han_diem_danh,
             ),
         )
-        cur.execute("SELECT CAST(SCOPE_IDENTITY() AS INT)")
-        new_id = int(cur.fetchone()[0])
+        row_out = cur.fetchone()
+        raw_id = row_out[0] if row_out else None
+        if raw_id is None:
+            conn.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail="Không lấy được mã buổi học sau khi tạo. Kiểm tra cột MaBuoi bảng BuoiHoc (IDENTITY hoặc DEFAULT).",
+            )
+        new_id = int(raw_id)
         conn.commit()
         return {"success": True, "ma_buoi": new_id, "message": "Đã tạo buổi học"}
     except HTTPException:
@@ -413,9 +452,7 @@ async def teacher_update_session(
             fields.append("GioBatDau = ?")
             params.append(_parse_time(body.gio_bat_dau))
         if body.ma_xac_thuc_buoi is not None:
-            code = body.ma_xac_thuc_buoi.strip()
-            if len(code) < 4:
-                raise HTTPException(status_code=400, detail="Mã buổi học tối thiểu 4 ký tự")
+            code = body.ma_xac_thuc_buoi
             cur.execute(
                 """
                 SELECT COUNT(*) FROM dbo.BuoiHoc

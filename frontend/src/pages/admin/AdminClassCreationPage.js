@@ -63,10 +63,10 @@ export default function AdminClassCreationPage() {
 
   return (
     <Box>
-      <Typography variant="h4" fontWeight={900} gutterBottom>
+      <Typography variant="h4" fontWeight="bold" gutterBottom>
         {t('adminClassCreate.title')}
       </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
         {t('adminClassCreate.subtitle')}
       </Typography>
 

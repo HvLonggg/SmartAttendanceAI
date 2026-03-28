@@ -79,7 +79,10 @@ export const authAPI = {
 
   adminListUsers: () => apiClient.get('/auth/admin/users'),
   setUserLock: (username, locked, reason) =>
-    apiClient.post(`/auth/admin/users/${username}/set-lock`, { locked, reason: reason || null }),
+    apiClient.post(`/auth/admin/users/${encodeURIComponent(String(username || '').trim())}/set-lock`, {
+      locked,
+      reason: reason || null,
+    }),
   provisionStudentAccounts: () => apiClient.post('/auth/admin/provision-student-accounts'),
 };
 
@@ -114,6 +117,10 @@ export const studentAPI = {
 export const studentPortalAPI = {
   getMyEnrollments: () => apiClient.get('/student/me/enrollments'),
   getMySessions: () => apiClient.get('/student/me/sessions'),
+  listOpenClasses: () => apiClient.get('/student/catalog/classes'),
+  getOpenClass: (maLhp) =>
+    apiClient.get(`/student/catalog/classes/${encodeURIComponent(String(maLhp || '').trim())}`),
+  enrollClass: (ma_lhp) => apiClient.post('/student/me/enrollments', { ma_lhp }),
   updateMyProfile: (payload) => apiClient.patch('/student/me/profile', payload),
   submitFeedback: (payload) => apiClient.post('/student/me/feedback', payload),
   listMyFeedbacks: () => apiClient.get('/student/me/feedbacks'),

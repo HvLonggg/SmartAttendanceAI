@@ -36,6 +36,7 @@ import { studentPortalAPI, attendanceAPI } from '../../services/api';
 import { getApiPathPrefix } from '../../config/apiBase';
 import { getStudentAvatarSrc } from '../../utils/studentAvatar';
 import { formatApiError } from '../../utils/apiError';
+import { isSessionScanCodeValid } from '../../utils/sessionScanCode';
 import { useI18n } from '../../i18n/I18nContext';
 
 const API = getApiPathPrefix();
@@ -141,11 +142,17 @@ export default function StudentAttendanceTab() {
       setRecognitionResult(result);
 
       if (result?.success && selectedSession) {
+        const codeTrim = maXacThuc.trim();
+        if (codeTrim && !isSessionScanCodeValid(codeTrim)) {
+          setError(t('studentAttendanceTab.scanCodeFormatError'));
+          setLoading(false);
+          return;
+        }
         // Auto check-in
         const checkinResponse = await attendanceAPI.checkin(
           result.student_info.ma_sv,
           selectedSession,
-          maXacThuc.trim() || undefined,
+          codeTrim || undefined,
         );
 
         if (checkinResponse.data.success) {

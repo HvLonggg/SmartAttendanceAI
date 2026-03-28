@@ -50,6 +50,12 @@ export default function LoginPage() {
             {registeredOk && (
               <Alert severity="success" sx={{ mb: 2 }} onClose={() => setDismissRegMsg(true)}>
                 Đăng ký thành công. Hãy đăng nhập bằng username và mật khẩu vừa tạo.
+                {location.state?.ma_sv ? (
+                  <>
+                    <br />
+                    Mã sinh viên (MaSV) của bạn: <strong>{location.state.ma_sv}</strong>
+                  </>
+                ) : null}
               </Alert>
             )}
             {error && (

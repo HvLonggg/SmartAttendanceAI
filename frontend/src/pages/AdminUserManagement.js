@@ -47,7 +47,12 @@ export default function AdminUserManagement() {
 
   return (
     <Box>
-      <Typography variant="h4" fontWeight="bold" gutterBottom>{t('adminUserManagement.title')}</Typography>
+      <Typography variant="h4" fontWeight="bold" gutterBottom>
+        {t('adminUserManagement.title')}
+      </Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+        {t('adminUserManagement.subtitle')}
+      </Typography>
 
       {error && (
         <Alert severity="error" sx={{ mb: 2 }}>
@@ -62,7 +67,9 @@ export default function AdminUserManagement() {
           </Typography>
 
           {loading ? (
-            <Typography>{t('adminUserManagement.loading')}</Typography>
+            <Typography color="text.secondary" variant="body2">
+              {t('adminUserManagement.loading')}
+            </Typography>
           ) : (
             <Table size="small">
               <TableHead>
@@ -77,8 +84,10 @@ export default function AdminUserManagement() {
               </TableHead>
               <TableBody>
                 {rows.map((r) => (
-                  <TableRow key={r.username}>
-                    <TableCell sx={{ fontWeight: 700 }}>{r.username}</TableCell>
+                  <TableRow key={r.username} hover>
+                    <TableCell>
+                      <Typography fontWeight={500}>{r.username}</Typography>
+                    </TableCell>
                     <TableCell>{r.role}</TableCell>
                     <TableCell>{r.email}</TableCell>
                     <TableCell>

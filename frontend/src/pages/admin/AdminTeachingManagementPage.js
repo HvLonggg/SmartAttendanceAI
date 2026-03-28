@@ -14,6 +14,7 @@ import {
   TableCell,
   TableHead,
   TableRow,
+  TableContainer,
   TextField,
   Typography,
 } from '@mui/material';
@@ -98,10 +99,10 @@ export default function AdminTeachingManagementPage() {
 
   return (
     <Box>
-      <Typography variant="h4" fontWeight={900} gutterBottom>
+      <Typography variant="h4" fontWeight="bold" gutterBottom>
         {t('adminTeaching.title')}
       </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
         {t('adminTeaching.subtitle')}
       </Typography>
 
@@ -172,12 +173,13 @@ export default function AdminTeachingManagementPage() {
                 </Button>
               </Stack>
 
-              <Typography variant="h6" fontWeight={800} sx={{ mb: 1 }}>
+              <Typography variant="h6" fontWeight="bold" gutterBottom color="text.primary">
                 {t('adminTeaching.assignmentTitle')}
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
                 {t('adminTeaching.unassignedHint')}
               </Typography>
+              <TableContainer>
               <Table size="small">
                 <TableHead>
                   <TableRow>
@@ -190,10 +192,10 @@ export default function AdminTeachingManagementPage() {
                 </TableHead>
                 <TableBody>
                   {classes.map((c) => (
-                    <TableRow key={c.ma_lhp}>
-                      <TableCell sx={{ fontWeight: 700 }}>{c.ma_lhp}</TableCell>
+                    <TableRow key={c.ma_lhp} hover>
+                      <TableCell>{c.ma_lhp}</TableCell>
                       <TableCell>
-                        <Typography fontWeight={700}>{c.ten_mon || '—'}</Typography>
+                        <Typography fontWeight={500}>{c.ten_mon || '—'}</Typography>
                         <Typography variant="caption" color="text.secondary">
                           {c.ma_mon || '—'}
                         </Typography>
@@ -246,6 +248,7 @@ export default function AdminTeachingManagementPage() {
                   )}
                 </TableBody>
               </Table>
+              </TableContainer>
             </CardContent>
           </Card>
         </Grid>
@@ -253,9 +256,10 @@ export default function AdminTeachingManagementPage() {
         <Grid item xs={12}>
           <Card>
             <CardContent>
-              <Typography variant="h6" fontWeight={800} sx={{ mb: 1 }}>
+              <Typography variant="h6" fontWeight="bold" gutterBottom color="text.primary">
                 {t('adminTeaching.overviewTitle')}
               </Typography>
+              <TableContainer>
               <Table size="small">
                 <TableHead>
                   <TableRow>
@@ -270,9 +274,9 @@ export default function AdminTeachingManagementPage() {
                 </TableHead>
                 <TableBody>
                   {filteredOverview.map((r) => (
-                    <TableRow key={`${r.ma_buoi}_${r.ma_sv || 'none'}_${r.thoi_gian_quet || 'none'}`}>
+                    <TableRow key={`${r.ma_buoi}_${r.ma_sv || 'none'}_${r.thoi_gian_quet || 'none'}`} hover>
                       <TableCell>
-                        <Typography fontWeight={700}>#{r.ma_buoi}</Typography>
+                        <Typography fontWeight={500}>{r.ma_buoi}</Typography>
                         <Typography variant="caption" color="text.secondary">
                           {r.ma_xac_thuc_buoi || '—'}
                         </Typography>
@@ -283,7 +287,7 @@ export default function AdminTeachingManagementPage() {
                         {r.gio_bat_dau || '—'}
                       </TableCell>
                       <TableCell>
-                        <Typography fontWeight={700}>{r.ten_mon || '—'}</Typography>
+                        <Typography fontWeight={500}>{r.ten_mon || '—'}</Typography>
                         <Typography variant="caption" color="text.secondary">
                           {r.ma_lhp} / {r.ma_mon || '—'}
                         </Typography>
@@ -303,6 +307,7 @@ export default function AdminTeachingManagementPage() {
                   )}
                 </TableBody>
               </Table>
+              </TableContainer>
             </CardContent>
           </Card>
         </Grid>

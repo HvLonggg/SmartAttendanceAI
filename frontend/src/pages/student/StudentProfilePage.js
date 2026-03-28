@@ -64,7 +64,7 @@ const readOnlyFieldProps = {
 
 export default function StudentProfilePage() {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
   const ma_sv = user?.ma_sv;
   const { t, locale } = useI18n();
   const dateLocale = locale === 'en' ? 'en-US' : 'vi-VN';
@@ -104,7 +104,11 @@ export default function StudentProfilePage() {
   }, [trainStatus, t]);
 
   const loadAll = async () => {
-    if (!ma_sv) return;
+    if (!ma_sv) {
+      setLoading(false);
+      setError(t('studentProfilePage.noMaSv'));
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -162,9 +166,10 @@ export default function StudentProfilePage() {
     try {
       await studentPortalAPI.updateMyProfile({
         ho_ten: profileHoTen,
-        email: profileEmail,
+        email: profileEmail || null,
       });
       setProfileMsg(t('studentProfilePage.updateMsg'));
+      await refreshUser();
       await loadAll();
     } catch (err) {
       setProfileErr(formatApiError(err.response?.data?.detail, t('studentProfilePage.saveFail')));
@@ -328,10 +333,10 @@ export default function StudentProfilePage() {
           <Card sx={{ borderRadius: 3, mb: 2 }}>
             <CardContent>
               <Typography variant="h6" fontWeight={900} gutterBottom>
-                  {t('studentProfilePage.sectionStudentInfoTitle')}
+                {t('studentProfilePage.sectionStudentInfoTitle')}
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                  {t('studentProfilePage.sectionStudentInfoHint')}
+                {t('studentProfilePage.sectionStudentInfoHint')}
               </Typography>
 
               <Grid container spacing={2}>
@@ -367,15 +372,11 @@ export default function StudentProfilePage() {
                 </Grid>
                 <Grid item xs={12} sm={6}>
                   <TextField
-                    label={t('studentProfilePage.fieldAccountEmail')}
-                    value={
-                      user?.email && !String(user.email).includes('@local.smartattendance')
-                        ? user.email
-                        : t('studentProfilePage.emailLoginHint')
-                    }
+                    label={t('studentProfilePage.fieldDbEmail')}
+                    value={student?.email?.trim() ? student.email : '—'}
                     fullWidth
                     size="small"
-                    helperText={t('studentProfilePage.accountEmailHelper')}
+                    helperText={t('studentProfilePage.dbEmailHelper')}
                     FormHelperTextProps={{ sx: { opacity: 1, color: 'text.secondary' } }}
                     {...readOnlyFieldProps}
                   />
@@ -385,7 +386,7 @@ export default function StudentProfilePage() {
               <Divider sx={{ my: 3 }} />
 
               <Typography variant="subtitle1" fontWeight={800} gutterBottom>
-                {t('studentProfilePage.editSectionTitle')}
+                {t('studentProfilePage.editSectionTitleShort')}
               </Typography>
               <Grid container spacing={2}>
                 <Grid item xs={12}>

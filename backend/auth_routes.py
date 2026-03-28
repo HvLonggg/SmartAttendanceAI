@@ -400,11 +400,11 @@ def role_allowed(role: str) -> bool:
 
 
 class RegisterRequest(BaseModel):
-    username: Optional[str] = None  # STUDENT: có thể để trống để hệ thống tự sinh
-    password: Optional[str] = None  # STUDENT: có thể để trống để hệ thống tự sinh
+    username: Optional[str] = None  # STUDENT / TEACHER: bắt buộc khi đăng ký
+    password: Optional[str] = None  # STUDENT / TEACHER: bắt buộc, tối thiểu 6 ký tự
     role: str  # STUDENT / TEACHER
     ho_ten: str
-    ma_sv: Optional[str] = None
+    ma_sv: Optional[str] = None  # STUDENT: bắt buộc — phải trùng MaSV đã có trong bảng SinhVien
     ma_gv: Optional[str] = None
     ma_khoa: Optional[str] = None  # TEACHER: chọn khoa/bộ môn — hệ thống cấp MaGV tự động
     chuyen_nganh: Optional[str] = None  # TEACHER: chuyên ngành theo khoa trong CSDL
@@ -468,6 +468,11 @@ class MeResponse(BaseModel):
     is_locked: bool
     avatar: Optional[str]
     profile: Dict[str, Any] = {}
+
+
+class AdminSetLockRequest(BaseModel):
+    locked: bool
+    reason: Optional[str] = None
 
 
 class StudentCredentialItem(BaseModel):
@@ -747,21 +752,6 @@ def _next_student_username(cursor, base: str) -> str:
     raise HTTPException(status_code=500, detail="Không thể cấp username tự động cho sinh viên")
 
 
-def _next_ma_sv_auto(cursor) -> str:
-    cursor.execute(
-        """
-        SELECT
-          ISNULL(MAX(CASE WHEN TRY_CAST(MaSV AS BIGINT) IS NOT NULL THEN TRY_CAST(MaSV AS BIGINT) END), 0) + 1,
-          ISNULL(MAX(CASE WHEN TRY_CAST(MaSV AS BIGINT) IS NOT NULL THEN LEN(MaSV) END), 8)
-        FROM dbo.SinhVien
-        """
-    )
-    row = cursor.fetchone()
-    next_num = int(row[0] or 1)
-    pad_len = int(row[1] or 8)
-    return str(next_num).zfill(max(4, min(12, pad_len)))
-
-
 @auth_router.get("/khoa")
 async def list_khoa():
     """Danh sách khoa/bộ môn (đăng ký giảng viên)."""
@@ -836,48 +826,43 @@ async def register(req: RegisterRequest):
     if not ho_ten:
         raise HTTPException(status_code=400, detail="Họ tên không hợp lệ")
 
-    ma_sv = (req.ma_sv or "").strip() or None
+    ma_sv: Optional[str] = None
     ma_gv = (req.ma_gv or "").strip() or None
     ma_khoa_in = (req.ma_khoa or "").strip() or None
     chuyen_nganh_in = (req.chuyen_nganh or "").strip() or None
     ma_khoa_user: Optional[str] = None
 
-    if role == "TEACHER" and not username_in:
+    if not username_in:
         raise HTTPException(status_code=400, detail="Thiếu username")
-
-    if role == "TEACHER" and (not req.password or len(req.password) < 6):
+    pwd = (req.password or "").strip()
+    if len(pwd) < 6:
         raise HTTPException(status_code=400, detail="Password phải >= 6 ký tự")
-
-    if role == "STUDENT":
-        # Username chuẩn theo "Họ đầu + Tên" (VD: Hoàng Ánh), có hậu tố số nếu trùng.
-        # Mật khẩu mặc định: TenKhongDau123@ (VD: Ánh -> Anh123@).
-        username_base = _build_student_username_base(ho_ten)
-        password_plain = _build_student_password(ho_ten)
-    else:
-        username_base = normalize_username(username_in)
-        password_plain = req.password or ""
+    username_base = normalize_username(username_in)
+    password_plain = pwd
 
     raw_email = (req.email or "").strip()
     conn = get_connection()
     cursor = conn.cursor()
     try:
         if role == "STUDENT":
-            username = _next_student_username(cursor, username_base)
-            if not ma_sv:
-                ma_sv = _next_ma_sv_auto(cursor)
-            cursor.execute("SELECT HoTen FROM dbo.SinhVien WHERE MaSV = ?", (ma_sv,))
+            username = username_base
+            ma_sv_in = (req.ma_sv or "").strip()
+            if not ma_sv_in:
+                raise HTTPException(status_code=400, detail="Vui lòng nhập mã sinh viên")
+            ma_sv = ma_sv_in
+            cursor.execute(
+                "SELECT HoTen FROM dbo.SinhVien WHERE LTRIM(RTRIM(MaSV)) = LTRIM(RTRIM(?))",
+                (ma_sv,),
+            )
             row_sv = cursor.fetchone()
-            if row_sv:
-                if row_sv[0]:
-                    ho_ten = (row_sv[0] or "").strip() or ho_ten
-            else:
-                cursor.execute(
-                    """
-                    INSERT INTO dbo.SinhVien (MaSV, HoTen, NgaySinh, GioiTinh, Lop, Khoa, Email, TrangThai)
-                    VALUES (?, ?, NULL, NULL, NULL, NULL, NULL, N'Đang học')
-                    """,
-                    (ma_sv, ho_ten),
+            if not row_sv:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Mã sinh viên không đúng hoặc chưa có trong hệ thống. Vui lòng kiểm tra lại.",
                 )
+            db_hoten = (row_sv[0] or "").strip()
+            if db_hoten:
+                ho_ten = db_hoten
         else:
             username = username_base
 
@@ -979,8 +964,8 @@ async def register(req: RegisterRequest):
             "success": True,
             "message": "Đăng ký thành công. Bạn có thể đăng nhập ngay bằng username và mật khẩu.",
             "username": username,
-            "password": password_plain if role == "STUDENT" else None,
-            "ma_sv": ma_sv,
+            "password": None,
+            "ma_sv": ma_sv if role == "STUDENT" else None,
         }
     except HTTPException:
         conn.rollback()
@@ -1402,15 +1387,20 @@ async def me(current=Depends(require_role("ADMIN", "TEACHER", "STUDENT"))):
 @auth_router.post("/admin/users/{username}/set-lock")
 async def set_lock(
     username: str,
-    locked: bool = True,
-    reason: Optional[str] = None,
+    body: AdminSetLockRequest,
     current=Depends(require_role("ADMIN")),
 ):
     username = normalize_username(username)
+    locked = body.locked
+    reason_in = (body.reason or "").strip() or None
+    lock_reason = reason_in if locked else None
     conn = get_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("UPDATE dbo.NguoiDung SET IsLocked = ?, LockReason = ?, UpdatedAt = SYSUTCDATETIME() WHERE Username = ?", (1 if locked else 0, reason, username))
+        cursor.execute(
+            "UPDATE dbo.NguoiDung SET IsLocked = ?, LockReason = ?, UpdatedAt = SYSUTCDATETIME() WHERE Username = ?",
+            (1 if locked else 0, lock_reason, username),
+        )
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Không tìm thấy user")
         conn.commit()
