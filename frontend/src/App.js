@@ -31,8 +31,11 @@ import StudentFeedbackPage from './pages/student/StudentFeedbackPage';
 import StudentProfilePage from './pages/student/StudentProfilePage';
 import StudentAttendancePage from './pages/student/StudentAttendancePage';
 import TeacherSessionsPage from './pages/teacher/TeacherSessionsPage';
+import TeacherSessionManagePage from './pages/teacher/TeacherSessionManagePage';
 import TeacherProfilePage from './pages/teacher/TeacherProfilePage';
 import TeacherCareerPage from './pages/teacher/TeacherCareerPage';
+import TeacherStudentVerifyPage from './pages/teacher/TeacherStudentVerifyPage';
+import FaceIdTestPage from './pages/FaceIdTestPage';
 
 import LoginPage from './pages/auth/LoginPage';
 import RegisterPage from './pages/auth/RegisterPage';
@@ -60,6 +63,7 @@ function App() {
                   <Route element={<RequireAuth roles={['ADMIN', 'TEACHER', 'STUDENT']} />}>
                     <Route path="dashboard" element={<Dashboard />} />
                     <Route path="students/:maSV/training" element={<StudentTraining />} />
+                    <Route path="students/:maSV/faceid-test" element={<FaceIdTestPage />} />
                     <Route path="students/:maSV" element={<StudentDetail />} />
                     <Route path="settings" element={<SettingsPage />} />
 
@@ -88,6 +92,8 @@ function App() {
                     {/* Giảng viên — đăng ký buổi học & hồ sơ */}
                     <Route element={<RequireAuth roles={['TEACHER']} />}>
                       <Route path="teacher/sessions" element={<TeacherSessionsPage />} />
+                      <Route path="teacher/session-management" element={<TeacherSessionManagePage />} />
+                      <Route path="teacher/verify-student" element={<TeacherStudentVerifyPage />} />
                       <Route path="teacher/career" element={<TeacherCareerPage />} />
                       <Route path="teacher/profile" element={<TeacherProfilePage />} />
                     </Route>

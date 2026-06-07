@@ -22,6 +22,7 @@ import { studentPortalAPI, analyticsAPI } from '../../services/api';
 import { useAuth } from '../../auth/AuthContext';
 import { formatApiError } from '../../utils/apiError';
 import { useI18n } from '../../i18n/I18nContext';
+import { getLocalDateISO } from '../../utils/studentSessionCheckin';
 
 const cardSx = {
   borderRadius: 3,
@@ -77,8 +78,8 @@ export default function StudentPortalHome() {
   const attended = analytics.reduce((s, x) => s + (x.so_buoi_co_mat || 0), 0);
   const rate = totalClasses > 0 ? Math.round((attended / totalClasses) * 100) : 0;
 
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const todaySessions = sessions.filter((s) => s.ngay_hoc === todayStr);
+  const todayStr = getLocalDateISO();
+  const todaySessions = sessions.filter((s) => (s.ngay_hoc || '').slice(0, 10) === todayStr);
 
   if (loading) {
     return (

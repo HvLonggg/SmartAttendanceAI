@@ -33,6 +33,8 @@ import {
   AssignmentInd as AssignmentIndIcon,
   Face as FaceIcon,
   AppRegistration as AppRegistrationIcon,
+  VerifiedUser as VerifiedUserIcon,
+  Checklist as ChecklistIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../../auth/AuthContext';
 import AuthUserAvatar from '../AuthUserAvatar';
@@ -57,7 +59,18 @@ const teacherMenuSpec = [
     path: '/teacher/sessions',
     match: (p) => p.startsWith('/teacher/sessions'),
   },
-  { tKey: 'nav.studentList', Icon: PeopleIcon, path: '/students' },
+  {
+    tKey: 'nav.teacherSessionManage',
+    Icon: ChecklistIcon,
+    path: '/teacher/session-management',
+    match: (p) => p.startsWith('/teacher/session-management'),
+  },
+  {
+    tKey: 'nav.teacherStudentVerify',
+    Icon: VerifiedUserIcon,
+    path: '/teacher/verify-student',
+    match: (p) => p === '/teacher/verify-student' || p.startsWith('/teacher/verify-student'),
+  },
   { tKey: 'nav.analytics', Icon: AssessmentIcon, path: '/analytics' },
   {
     tKey: 'nav.teacherCareer',

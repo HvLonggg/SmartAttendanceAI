@@ -73,6 +73,7 @@ function AnalyticsReport() {
   const [comparisonData, setComparisonData] = useState([]);
   const [topStudents, setTopStudents] = useState([]);
   const [atRiskStudents, setAtRiskStudents] = useState([]);
+  const [recentSessions, setRecentSessions] = useState([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -84,13 +85,14 @@ function AnalyticsReport() {
         setError(null);
 
         if (isTeacher) {
-          const [ov, tr, st, top, risk, comp] = await Promise.all([
+          const [ov, tr, st, top, risk, comp, rs] = await Promise.all([
             teacherAPI.getAnalyticsOverview(),
             teacherAPI.getAttendanceTrend(7),
             teacherAPI.getStatusDistribution(),
             teacherAPI.getTopStudents(5),
             teacherAPI.getAtRiskStudents(),
             teacherAPI.getClassComparison(),
+            teacherAPI.getRecentSessionStats(14),
           ]);
           if (cancelled) return;
           setOverview(ov.data);
@@ -99,36 +101,25 @@ function AnalyticsReport() {
           setComparisonData(comp.data || []);
           setTopStudents(top.data || []);
           setAtRiskStudents(risk.data || []);
+          setRecentSessions(rs.data || []);
         } else {
-          const [dash, tr, st, top, risk, comp] = await Promise.all([
-            analyticsAPI.getDashboardStats(),
+          const [ov, tr, st, top, risk, comp, rs] = await Promise.all([
+            analyticsAPI.getAnalyticsOverview(),
             analyticsAPI.getAttendanceTrend(7),
             analyticsAPI.getStatusDistribution(),
             analyticsAPI.getTopStudents(5),
             analyticsAPI.getAtRiskStudents(),
             analyticsAPI.getClassComparison(),
+            analyticsAPI.getRecentSessionStats(14),
           ]);
           if (cancelled) return;
-          const classes = comp.data || [];
-          const avg = classes.length
-            ? classes.reduce((s, x) => s + (x.tyLe || 0), 0) / classes.length
-            : 0;
-          const atRisk = risk.data || [];
-          const total = dash.data?.total_students ?? 0;
-          const eligibleApprox = Math.max(0, total - atRisk.length);
-          setOverview({
-            avg_attendance_rate: Math.round(avg * 100) / 100,
-            eligible_ratio_text: total ? `${eligibleApprox}/${total}` : '0/0',
-            eligible_ok_percent: total ? Math.round((10000 * eligibleApprox) / total) / 100 : 0,
-            at_risk_count: atRisk.length,
-            late_rate_week: dash.data?.late_rate ?? 0,
-            _admin_note: true,
-          });
+          setOverview(ov.data);
           setTrendData((tr.data || []).map(normalizeTrendRow));
           setBehaviorData(normalizeStatusForRadar(st.data));
-          setComparisonData(classes);
+          setComparisonData(comp.data || []);
           setTopStudents(top.data || []);
-          setAtRiskStudents(atRisk);
+          setAtRiskStudents(risk.data || []);
+          setRecentSessions(rs.data || []);
         }
       } catch (e) {
         console.error(e);
@@ -172,15 +163,13 @@ function AnalyticsReport() {
     <Box>
       <Typography variant="h4" gutterBottom fontWeight="bold">{t('analyticsReport.title')}</Typography>
 
-      {isTeacher && (
+      {isTeacher ? (
         <Alert severity="info" sx={{ mb: 2 }}>
           {t('analyticsReport.teacherNote')}
         </Alert>
-      )}
-
-      {!isTeacher && overview?._admin_note && (
-        <Alert severity="warning" sx={{ mb: 2 }}>
-          {t('analyticsReport.adminEstimateNote')}
+      ) : (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          {t('analyticsReport.adminNote')}
         </Alert>
       )}
 
@@ -220,7 +209,7 @@ function AnalyticsReport() {
           <Card>
             <CardContent>
               <Typography color="textSecondary" variant="body2">
-                {isTeacher ? t('analyticsReport.eligibleTitleTeacher') : t('analyticsReport.eligibleTitleEstimate')}
+                {isTeacher ? t('analyticsReport.eligibleTitleTeacher') : t('analyticsReport.eligibleTitleAdmin')}
               </Typography>
               <Typography variant="h3" color="success.main">
                 {overview?.eligible_ratio_text ?? '—'}
@@ -323,6 +312,68 @@ function AnalyticsReport() {
         </Grid>
       </Grid>
 
+      <Grid container spacing={3} sx={{ mb: 3 }}>
+        <Grid item xs={12}>
+          <Card>
+            <CardContent>
+              <Typography variant="h6" gutterBottom>
+                {t('analyticsReport.recentSessionsTitle')}
+              </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                  {t('analyticsReport.recentSessionsHint')}
+                </Typography>
+                {recentSessions.length === 0 ? (
+                  <Typography color="text.secondary">{t('analyticsReport.emptyRecentSessions')}</Typography>
+                ) : (
+                  <TableContainer>
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>{t('analyticsReport.colBuoi')}</TableCell>
+                          <TableCell>{t('analyticsReport.colMaLhp')}</TableCell>
+                          <TableCell>{t('analyticsReport.colNgayGio')}</TableCell>
+                          <TableCell align="right">{t('analyticsReport.colTongDk')}</TableCell>
+                          <TableCell align="right">{t('analyticsReport.colDaQuet')}</TableCell>
+                          <TableCell align="right">{t('analyticsReport.colDungTre')}</TableCell>
+                          <TableCell align="right">{t('analyticsReport.colVangUoc')}</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {recentSessions.map((row) => (
+                          <TableRow key={row.ma_buoi}>
+                            <TableCell>{row.ma_buoi}</TableCell>
+                            <TableCell>
+                              <Typography variant="body2" fontWeight={600}>
+                                {row.ten_mon || '—'}
+                              </Typography>
+                              <Typography variant="caption" color="text.secondary">
+                                {row.ma_lhp}
+                              </Typography>
+                            </TableCell>
+                            <TableCell>
+                              {row.ngay_hoc
+                                ? `${new Date(row.ngay_hoc).toLocaleDateString(
+                                    locale === 'en' ? 'en-US' : 'vi-VN'
+                                  )} ${(row.gio_bat_dau || '').toString().slice(0, 5)}`
+                                : '—'}
+                            </TableCell>
+                            <TableCell align="right">{row.tong_sv_dang_ky ?? 0}</TableCell>
+                            <TableCell align="right">{row.so_luot_quet ?? 0}</TableCell>
+                            <TableCell align="right">
+                              {row.dung_gio ?? 0} / {row.tre ?? 0}
+                            </TableCell>
+                            <TableCell align="right">{row.vang_uoc ?? 0}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                )}
+              </CardContent>
+            </Card>
+          </Grid>
+        </Grid>
+
       {/* So sánh lớp */}
       <Grid container spacing={3} sx={{ mb: 3 }}>
         <Grid item xs={12}>
@@ -362,12 +413,13 @@ function AnalyticsReport() {
                       <TableCell>{t('analyticsReport.table.studentCode')}</TableCell>
                       <TableCell>{t('analyticsReport.table.studentName')}</TableCell>
                       <TableCell align="right">{t('analyticsReport.table.ratio')}</TableCell>
+                      {isTeacher && <TableCell>{t('analyticsReport.topHabitCol')}</TableCell>}
                     </TableRow>
                   </TableHead>
                   <TableBody>
                     {topStudents.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={4}>
+                        <TableCell colSpan={isTeacher ? 5 : 4}>
                           <Typography color="text.secondary">{t('analyticsReport.emptyTop')}</Typography>
                         </TableCell>
                       </TableRow>
@@ -384,6 +436,13 @@ function AnalyticsReport() {
                               size="small"
                             />
                           </TableCell>
+                          {isTeacher && (
+                            <TableCell>
+                              <Typography variant="body2" color="text.secondary">
+                                {student.ghi_chu_thoi_quen || '—'}
+                              </Typography>
+                            </TableCell>
+                          )}
                         </TableRow>
                       ))
                     )}
@@ -406,12 +465,13 @@ function AnalyticsReport() {
                       <TableCell>{t('analyticsReport.table.studentName')}</TableCell>
                       <TableCell align="right">{t('analyticsReport.table.ratio')}</TableCell>
                       <TableCell>{t('analyticsReport.table.warning')}</TableCell>
+                      {isTeacher && <TableCell>{t('analyticsReport.riskHabitCol')}</TableCell>}
                     </TableRow>
                   </TableHead>
                   <TableBody>
                     {atRiskStudents.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={4}>
+                        <TableCell colSpan={isTeacher ? 5 : 4}>
                           <Typography color="text.secondary">{t('analyticsReport.emptyAtRisk')}</Typography>
                         </TableCell>
                       </TableRow>
@@ -435,6 +495,13 @@ function AnalyticsReport() {
                               icon={<WarningIcon />}
                             />
                           </TableCell>
+                          {isTeacher && (
+                            <TableCell>
+                              <Typography variant="body2" color="text.secondary">
+                                {student.thoi_quen_hoc_tap || '—'}
+                              </Typography>
+                            </TableCell>
+                          )}
                         </TableRow>
                       ))
                     )}
@@ -450,14 +517,20 @@ function AnalyticsReport() {
       <Card sx={{ mt: 3 }}>
         <CardContent>
           <Typography variant="h6" gutterBottom>{t('analyticsReport.quickSummary')}</Typography>
-          <Alert severity="info" sx={{ mb: 2 }}>
-            <Typography variant="body2">
-              {t('analyticsReport.quickSummaryHint', {
-                avg: (overview?.avg_attendance_rate ?? 0).toFixed(1),
-                riskCount: overview?.at_risk_count ?? 0,
-              })}
+          {(overview?.tracked_students ?? 0) > 0 || (overview?.at_risk_count ?? 0) > 0 ? (
+            <Alert severity="info" sx={{ mb: 2 }}>
+              <Typography variant="body2">
+                {t('analyticsReport.quickSummaryHint', {
+                  avg: (overview?.avg_attendance_rate ?? 0).toFixed(1),
+                  riskCount: overview?.at_risk_count ?? 0,
+                })}
+              </Typography>
+            </Alert>
+          ) : (
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              {t('analyticsReport.quickSummaryNoData')}
             </Typography>
-          </Alert>
+          )}
           <Box sx={{ mb: 1 }}>
             <Typography variant="caption" color="text.secondary">
               {t('analyticsReport.lateRateCaption')}

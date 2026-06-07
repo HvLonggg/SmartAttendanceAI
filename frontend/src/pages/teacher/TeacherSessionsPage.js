@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Box,
   Typography,
@@ -24,12 +25,14 @@ import {
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditIcon from '@mui/icons-material/Edit';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import VisibilityIcon from '@mui/icons-material/Visibility';
 import { teacherAPI } from '../../services/api';
 import { formatApiError } from '../../utils/apiError';
 import { isSessionScanCodeValid } from '../../utils/sessionScanCode';
 import { useI18n } from '../../i18n/I18nContext';
 
 export default function TeacherSessionsPage() {
+  const navigate = useNavigate();
   const [classes, setClasses] = useState([]);
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -273,6 +276,8 @@ export default function TeacherSessionsPage() {
                     <TableCell>{t('teacherSessionsPage.table.courseLhp')}</TableCell>
                     <TableCell>{t('teacherSessionsPage.table.date')}</TableCell>
                     <TableCell>{t('teacherSessionsPage.table.time')}</TableCell>
+                    <TableCell align="right">{t('teacherSessionsPage.table.enrolled')}</TableCell>
+                    <TableCell align="right">{t('teacherSessionsPage.table.checkins')}</TableCell>
                     <TableCell>{t('teacherSessionsPage.table.scanCode')}</TableCell>
                     <TableCell align="right">{t('teacherSessionsPage.table.actions')}</TableCell>
                   </TableRow>
@@ -291,12 +296,23 @@ export default function TeacherSessionsPage() {
                       </TableCell>
                       <TableCell>{(s.ngay_hoc || '').slice(0, 10)}</TableCell>
                       <TableCell>{(s.gio_bat_dau || '').slice(0, 8)}</TableCell>
+                      <TableCell align="right">{s.so_sv_dang_ky ?? '—'}</TableCell>
+                      <TableCell align="right">{s.so_luot_diem_danh ?? '—'}</TableCell>
                       <TableCell>
                         <Typography variant="body2" fontFamily="monospace">
                           {s.ma_xac_thuc_buoi || '—'}
                         </Typography>
                       </TableCell>
                       <TableCell align="right">
+                        <IconButton
+                          size="small"
+                          color="secondary"
+                          onClick={() => navigate(`/teacher/session-management?ma_buoi=${encodeURIComponent(s.ma_buoi)}`)}
+                          title={t('teacherSessionsPage.viewSessionAttendance')}
+                          sx={{ bgcolor: 'rgba(99,102,241,0.08)', '&:hover': { bgcolor: 'rgba(99,102,241,0.16)' } }}
+                        >
+                          <VisibilityIcon fontSize="small" />
+                        </IconButton>
                         <IconButton size="small" onClick={() => openEdit({ ...s })}>
                           <EditIcon fontSize="small" />
                         </IconButton>
@@ -308,7 +324,7 @@ export default function TeacherSessionsPage() {
                   ))}
                   {!sessions.length && (
                     <TableRow>
-                      <TableCell colSpan={6} align="center">
+                      <TableCell colSpan={8} align="center">
                         {t('teacherSessionsPage.table.empty')}
                       </TableCell>
                     </TableRow>

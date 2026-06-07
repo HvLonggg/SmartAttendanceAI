@@ -89,25 +89,21 @@ function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  const attendanceData = useMemo(
-    () => [
-      { name: t('dashboard.mon'), coMat: 45, vang: 5 },
-      { name: t('dashboard.tue'), coMat: 48, vang: 2 },
-      { name: t('dashboard.wed'), coMat: 47, vang: 3 },
-      { name: t('dashboard.thu'), coMat: 46, vang: 4 },
-      { name: t('dashboard.fri'), coMat: 44, vang: 6 },
-    ],
-    [t]
-  );
+  const barChartData = useMemo(() => {
+    const rows = stats?.chart_trend_7d;
+    if (!Array.isArray(rows)) return [];
+    return rows.map((d) => ({
+      name: d.name || '',
+      coMat: d.coMat ?? 0,
+      tre: d.tre ?? 0,
+    }));
+  }, [stats]);
 
-  const statusData = useMemo(
-    () => [
-      { name: t('dashboard.onTime'), value: 75 },
-      { name: t('dashboard.late'), value: 20 },
-      { name: t('dashboard.absentShort'), value: 5 },
-    ],
-    [t]
-  );
+  const pieChartData = useMemo(() => {
+    const rows = stats?.chart_status_7d;
+    if (!Array.isArray(rows)) return [];
+    return rows.map((x) => ({ name: x.name || '—', value: x.value ?? 0 }));
+  }, [stats]);
 
   const fetchDashboardData = async () => {
     try {
@@ -187,12 +183,12 @@ function Dashboard() {
     return (
       <Box>
         <Typography variant="h4" fontWeight="bold" gutterBottom color="text.primary">
-          Tổng quan quản trị học phần
+          Tổng quan
         </Typography>
 
         <Grid container spacing={3} sx={{ mb: 4 }}>
           <Grid item xs={12} sm={6} md={3}>
-            <StatCard title="Tổng học phần" value={s.total_hoc_phan || 0} icon={<EventIcon />} color="#1976d2" />
+            <StatCard title="Tổng lớp" value={s.total_hoc_phan || 0} icon={<EventIcon />} color="#1976d2" />
           </Grid>
           <Grid item xs={12} sm={6} md={3}>
             <StatCard title="Tạo trong ngày" value={s.created_today || 0} icon={<CheckIcon />} color="#2e7d32" />
@@ -210,7 +206,7 @@ function Dashboard() {
             <Card>
               <CardContent>
                 <Typography variant="h6" fontWeight="bold" gutterBottom color="text.primary">
-                  Giảng viên được phân công nhiều/ít
+                  Số lớp theo giảng viên
                 </Typography>
                 <ResponsiveContainer width="100%" height={300}>
                   <BarChart data={teacherLoadChart}>
@@ -219,7 +215,7 @@ function Dashboard() {
                     <YAxis stroke="currentColor" />
                     <Tooltip contentStyle={{ backgroundColor: theme.palette.background.paper }} />
                     <Legend />
-                    <Bar dataKey="so_hoc_phan" fill="#6366f1" name="Số học phần phân công" />
+                    <Bar dataKey="so_hoc_phan" fill="#6366f1" name="Số lớp" />
                   </BarChart>
                 </ResponsiveContainer>
               </CardContent>
@@ -230,18 +226,33 @@ function Dashboard() {
             <Card>
               <CardContent>
                 <Typography variant="h6" fontWeight="bold" gutterBottom color="text.primary">
-                  Thông báo tổng quan
+                  Thông báo
                 </Typography>
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-                  <Alert severity="info">Đã phân công: {s.assigned_count || 0} học phần</Alert>
+                  <Alert severity="info">Đã phân công: {s.assigned_count || 0} lớp</Alert>
                   <Alert severity={(s.unassigned_count || 0) > 0 ? 'warning' : 'success'}>
-                    Chưa phân công: {s.unassigned_count || 0} học phần
+                    Chưa phân công: {s.unassigned_count || 0} lớp
                   </Alert>
-                  {alerts.map((a, i) => (
-                    <Alert key={i} severity="info">
-                      {a}
-                    </Alert>
-                  ))}
+                  {alerts.length > 0 ? (
+                    alerts.map((a, i) => (
+                      <Alert
+                        key={i}
+                        severity={
+                          a.includes('chưa phân công') || a.includes('Chưa có')
+                            ? 'warning'
+                            : a.includes('ổn định')
+                              ? 'success'
+                              : 'info'
+                        }
+                      >
+                        {a}
+                      </Alert>
+                    ))
+                  ) : (
+                    <Typography variant="body2" color="text.secondary">
+                      Chưa có thông báo.
+                    </Typography>
+                  )}
                 </Box>
               </CardContent>
             </Card>
@@ -251,12 +262,12 @@ function Dashboard() {
             <Card>
               <CardContent>
                 <Typography variant="h6" fontWeight="bold" gutterBottom color="text.primary">
-                  Dữ liệu điểm danh theo từng học phần đã phân công
+                  Điểm danh theo lớp
                 </Typography>
                 <Table size="small">
                   <TableHead>
                     <TableRow>
-                      <TableCell>Mã học phần</TableCell>
+                      <TableCell>Mã lớp</TableCell>
                       <TableCell>Môn học</TableCell>
                       <TableCell>Giảng viên phụ trách</TableCell>
                       <TableCell align="right">Số buổi</TableCell>
@@ -300,7 +311,7 @@ function Dashboard() {
         <Dialog open={detailOpen} onClose={() => setDetailOpen(false)} maxWidth="lg" fullWidth>
           <DialogTitle>
             <Typography variant="h6" component="span">
-              Chi tiết học phần {selectedClassDetail?.ma_lhp || ''}
+              Chi tiết lớp {selectedClassDetail?.ma_lhp || ''}
             </Typography>
           </DialogTitle>
           <DialogContent dividers>
@@ -316,7 +327,7 @@ function Dashboard() {
                 </Alert>
 
                 <Typography variant="subtitle1" fontWeight="bold">
-                  Danh sách buổi học giảng viên đã tạo
+                  Buổi học
                 </Typography>
                 <Table size="small">
                   <TableHead>
@@ -344,7 +355,7 @@ function Dashboard() {
                 </Table>
 
                 <Typography variant="subtitle1" fontWeight="bold">
-                  Sinh viên đã điểm danh học phần này
+                  Sinh viên đã điểm danh
                 </Typography>
                 <Table size="small">
                   <TableHead>
@@ -427,19 +438,25 @@ function Dashboard() {
           <Card>
             <CardContent>
               <Typography variant="h6" fontWeight="bold" gutterBottom color="text.primary">
-                {t('dashboard.weekAttendance')}
+                {t('dashboard.weekAttendanceTeacher')}
               </Typography>
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={attendanceData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="name" stroke="currentColor" />
-                  <YAxis stroke="currentColor" />
-                  <Tooltip contentStyle={{ backgroundColor: theme.palette.background.paper }} />
-                  <Legend />
-                  <Bar dataKey="coMat" fill="#2e7d32" name={t('dashboard.present')} />
-                  <Bar dataKey="vang" fill="#d32f2f" name={t('dashboard.absent')} />
-                </BarChart>
-              </ResponsiveContainer>
+              {barChartData.length === 0 ? (
+                <Typography color="text.secondary" sx={{ py: 4 }}>
+                  {t('dashboard.chartNoDataWeek')}
+                </Typography>
+              ) : (
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={barChartData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="name" stroke="currentColor" />
+                    <YAxis stroke="currentColor" />
+                    <Tooltip contentStyle={{ backgroundColor: theme.palette.background.paper }} />
+                    <Legend />
+                    <Bar dataKey="coMat" fill="#2e7d32" name={t('dashboard.present')} />
+                    <Bar dataKey="tre" fill="#ed6c02" name={t('dashboard.late')} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
             </CardContent>
           </Card>
         </Grid>
@@ -448,27 +465,33 @@ function Dashboard() {
           <Card>
             <CardContent>
               <Typography variant="h6" fontWeight="bold" gutterBottom color="text.primary">
-                {t('dashboard.statusDist')}
+                {t('dashboard.statusDistTeacher')}
               </Typography>
-              <ResponsiveContainer width="100%" height={300}>
-                <PieChart>
-                  <Pie
-                    data={statusData}
-                    cx="50%"
-                    cy="50%"
-                    labelLine={false}
-                    label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
-                    outerRadius={80}
-                    fill="#8884d8"
-                    dataKey="value"
-                  >
-                    {statusData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip contentStyle={{ backgroundColor: theme.palette.background.paper }} />
-                </PieChart>
-              </ResponsiveContainer>
+              {pieChartData.length === 0 ? (
+                <Typography color="text.secondary" sx={{ py: 4 }}>
+                  {t('dashboard.chartNoDataStatus')}
+                </Typography>
+              ) : (
+                <ResponsiveContainer width="100%" height={300}>
+                  <PieChart>
+                    <Pie
+                      data={pieChartData}
+                      cx="50%"
+                      cy="50%"
+                      labelLine={false}
+                      label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
+                      outerRadius={80}
+                      fill="#8884d8"
+                      dataKey="value"
+                    >
+                      {pieChartData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip contentStyle={{ backgroundColor: theme.palette.background.paper }} />
+                  </PieChart>
+                </ResponsiveContainer>
+              )}
             </CardContent>
           </Card>
         </Grid>
@@ -480,9 +503,28 @@ function Dashboard() {
                 {t('dashboard.alerts')}
               </Typography>
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <Alert severity="warning">{t('dashboard.alertLowAttendance')}</Alert>
-                <Alert severity="info">{t('dashboard.alertNext')}</Alert>
-                <Alert severity="success">{t('dashboard.alertOk')}</Alert>
+                {Array.isArray(stats?.alerts) && stats.alerts.length > 0 ? (
+                  stats.alerts.map((a, i) => (
+                    <Alert
+                      key={i}
+                      severity={
+                        a.severity === 'success'
+                          ? 'success'
+                          : a.severity === 'warning'
+                            ? 'warning'
+                            : a.severity === 'error'
+                              ? 'error'
+                              : 'info'
+                      }
+                    >
+                      {a.message}
+                    </Alert>
+                  ))
+                ) : (
+                  <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>
+                    {t('dashboard.teacherNoAlerts')}
+                  </Typography>
+                )}
               </Box>
             </CardContent>
           </Card>

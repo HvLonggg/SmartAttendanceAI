@@ -29,6 +29,9 @@ import {
 } from '@mui/icons-material';
 import { recognitionAPI, attendanceAPI, CameraWebSocket } from '../services/api';
 import { getStudentAvatarSrc } from '../utils/studentAvatar';
+import { captureSequentialWebcamFrames, buildRecognizeLiveFormData } from '../utils/liveWebcamCapture';
+import { getRecognitionBlockFeedback } from '../utils/recognitionFeedback';
+import { useI18n } from '../i18n/I18nContext';
 
 const videoConstraints = {
   width: 640,
@@ -37,6 +40,7 @@ const videoConstraints = {
 };
 
 function AttendanceCamera() {
+  const { t } = useI18n();
   const webcamRef = useRef(null);
   const [isCapturing, setIsCapturing] = useState(false);
   const [recognitionResult, setRecognitionResult] = useState(null);
@@ -71,21 +75,30 @@ function AttendanceCamera() {
   };
 
   const capture = useCallback(async () => {
-    const imageSrc = webcamRef.current.getScreenshot();
-    if (!imageSrc) return;
+    if (!webcamRef.current?.getScreenshot?.()) return;
 
     setLoading(true);
     try {
-      const response = await recognitionAPI.recognizeFromBase64(imageSrc);
+      const blobs = await captureSequentialWebcamFrames(webcamRef, { count: 3, gapMs: 280 });
+      const response = await recognitionAPI.recognizeLiveFrames(buildRecognizeLiveFormData(blobs));
       const result = response.data;
-      
+
       setRecognitionResult(result);
 
+      const blockFeedback = getRecognitionBlockFeedback(result, t);
+      if (blockFeedback) {
+        setError(blockFeedback.formatted);
+        return;
+      }
+
       if (result.success && selectedSession) {
-        // Tự động điểm danh
+        const last = blobs[blobs.length - 1];
+        const snap = new File([last], 'capture.jpg', { type: 'image/jpeg' });
         const checkinResponse = await attendanceAPI.checkin(
           result.student_info.ma_sv,
-          selectedSession
+          selectedSession,
+          undefined,
+          snap,
         );
 
         if (checkinResponse.data.success) {
@@ -184,58 +197,88 @@ function AttendanceCamera() {
                 </FormControl>
               </Box>
 
-              <Box
-                sx={{
-                  position: 'relative',
-                  width: '100%',
-                  backgroundColor: '#000',
-                  borderRadius: 2,
-                  overflow: 'hidden',
-                }}
-              >
-                <Webcam
-                  audio={false}
-                  ref={webcamRef}
-                  screenshotFormat="image/jpeg"
-                  videoConstraints={videoConstraints}
-                  style={{ width: '100%', height: 'auto' }}
-                />
-                
-                {loading && (
-                  <Box
-                    sx={{
-                      position: 'absolute',
-                      top: 0,
-                      left: 0,
-                      right: 0,
-                      bottom: 0,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      backgroundColor: 'rgba(0,0,0,0.5)',
-                    }}
-                  >
-                    <CircularProgress color="primary" />
-                  </Box>
-                )}
-
-                {isCapturing && (
-                  <Chip
-                    label="ĐANG QUÉT"
-                    color="error"
-                    size="small"
-                    sx={{
-                      position: 'absolute',
-                      top: 16,
-                      right: 16,
-                      animation: 'blink 1.5s linear infinite',
-                      '@keyframes blink': {
-                        '0%, 49%': { opacity: 1 },
-                        '50%, 100%': { opacity: 0.3 },
-                      },
-                    }}
+              <Box sx={{ display: 'flex', justifyContent: 'center' }}>
+                <Box
+                  sx={{
+                    position: 'relative',
+                    width: { xs: 260, sm: 310, md: 350 },
+                    height: { xs: 260, sm: 310, md: 350 },
+                    backgroundColor: '#000',
+                    borderRadius: '50%',
+                    overflow: 'hidden',
+                    border: '3px solid rgba(56,189,248,0.8)',
+                    boxShadow: '0 0 0 10px rgba(56,189,248,0.08), 0 0 40px rgba(56,189,248,0.35)',
+                  }}
+                >
+                  <Webcam
+                    audio={false}
+                    ref={webcamRef}
+                    screenshotFormat="image/jpeg"
+                    videoConstraints={videoConstraints}
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                   />
-                )}
+
+                  {isCapturing && (
+                    <Box
+                      sx={{
+                        position: 'absolute',
+                        inset: 0,
+                        pointerEvents: 'none',
+                        '&::after': {
+                          content: '""',
+                          position: 'absolute',
+                          left: 0,
+                          right: 0,
+                          top: '-20%',
+                          height: 4,
+                          background: 'linear-gradient(90deg, transparent, #67e8f9, transparent)',
+                          boxShadow: '0 0 18px #67e8f9',
+                          animation: 'faceScanLineLegacy 1.6s linear infinite',
+                        },
+                        '@keyframes faceScanLineLegacy': {
+                          '0%': { top: '-10%' },
+                          '100%': { top: '110%' },
+                        },
+                      }}
+                    />
+                  )}
+                
+                  {loading && (
+                    <Box
+                      sx={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        backgroundColor: 'rgba(0,0,0,0.5)',
+                      }}
+                    >
+                      <CircularProgress color="primary" />
+                    </Box>
+                  )}
+
+                  {isCapturing && (
+                    <Chip
+                      label="ĐANG QUÉT"
+                      color="error"
+                      size="small"
+                      sx={{
+                        position: 'absolute',
+                        top: 16,
+                        right: 16,
+                        animation: 'blink 1.5s linear infinite',
+                        '@keyframes blink': {
+                          '0%, 49%': { opacity: 1 },
+                          '50%, 100%': { opacity: 0.3 },
+                        },
+                      }}
+                    />
+                  )}
+                </Box>
               </Box>
 
               <Box sx={{ mt: 2, display: 'flex', gap: 2, justifyContent: 'center' }}>

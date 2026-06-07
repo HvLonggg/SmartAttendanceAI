@@ -35,9 +35,13 @@ import {
   Verified as VerifiedIcon,
 } from '@mui/icons-material';
 import axios from 'axios';
+import { attendanceAPI, recognitionAPI } from '../services/api';
+import { captureSequentialWebcamFrames, buildRecognizeLiveFormData } from '../utils/liveWebcamCapture';
+import { FACE_ID_LIVE_CAPTURE } from '../config/faceIdLiveCapture';
 import { getStudentAvatarSrc } from '../utils/studentAvatar';
 import { formatApiError } from '../utils/apiError';
 import { getApiPathPrefix } from '../config/apiBase';
+import { getRecognitionBlockFeedback } from '../utils/recognitionFeedback';
 import { useI18n } from '../i18n/I18nContext';
 
 const API = getApiPathPrefix();
@@ -117,38 +121,49 @@ function EnhancedAttendanceCamera() {
   };
 
   const captureAndRecognize = async () => {
-    const imageSrc = webcamRef.current?.getScreenshot();
-    if (!imageSrc) return;
+    if (!webcamRef.current?.getScreenshot?.()) return;
 
     setLoading(true);
     setRecognitionResult(null);
 
     try {
-      // Convert base64 to blob
-      const blob = await fetch(imageSrc).then(r => r.blob());
-      const file = new File([blob], 'capture.jpg', { type: 'image/jpeg' });
+      let blobs;
+      try {
+        blobs = await captureSequentialWebcamFrames(webcamRef, {
+          count: FACE_ID_LIVE_CAPTURE.count,
+          gapMs: FACE_ID_LIVE_CAPTURE.gapMs,
+        });
+      } catch {
+        setError(t('studentAttendanceTab.liveCaptureFail'));
+        setLoading(false);
+        return;
+      }
 
-      // Call recognition API
-      const formData = new FormData();
-      formData.append('file', file);
-
-      const response = await axios.post(`${API}/recognize`, formData);
+      const response = await recognitionAPI.recognizeLiveFrames(buildRecognizeLiveFormData(blobs));
       const result = response.data;
 
       setRecognitionResult(result);
 
+      const blockFeedback = getRecognitionBlockFeedback(result, t);
+      if (blockFeedback) {
+        setError(blockFeedback.formatted);
+        setTimeout(() => setError(null), 8000);
+        setLoading(false);
+        return;
+      }
+
+      const lastBlob = blobs[blobs.length - 1];
+      const file = new File([lastBlob], 'capture.jpg', { type: 'image/jpeg' });
+
       // If recognized successfully, auto check-in
       if (result.success && selectedSession) {
         try {
-          const checkinResponse = await axios.post(
-            `${API}/attendance/checkin`,
-            null,
-            {
-              params: {
-                ma_sv: result.student_info.ma_sv,
-                ma_buoi: selectedSession,
-              },
-            }
+          const checkinResponse = await attendanceAPI.checkin(
+            result.student_info.ma_sv,
+            selectedSession,
+            undefined,
+            file,
+            blobs,
           );
 
           if (checkinResponse.data.success) {
@@ -284,63 +299,94 @@ function EnhancedAttendanceCamera() {
           {/* Camera Feed */}
           <Card>
             <CardContent>
-              <Box
-                sx={{
-                  position: 'relative',
-                  backgroundColor: '#000',
-                  borderRadius: 2,
-                  overflow: 'hidden',
-                }}
-              >
-                <Webcam
-                  ref={webcamRef}
-                  audio={false}
-                  screenshotFormat="image/jpeg"
-                  videoConstraints={{
-                    width: 1280,
-                    height: 720,
-                    facingMode: 'user',
+              <Box sx={{ display: 'flex', justifyContent: 'center' }}>
+                <Box
+                  sx={{
+                    position: 'relative',
+                    width: { xs: 270, sm: 320, md: 360 },
+                    height: { xs: 270, sm: 320, md: 360 },
+                    borderRadius: '50%',
+                    overflow: 'hidden',
+                    backgroundColor: '#000',
+                    border: '3px solid rgba(56,189,248,0.8)',
+                    boxShadow: '0 0 0 10px rgba(56,189,248,0.08), 0 0 40px rgba(56,189,248,0.35)',
                   }}
-                  style={{ width: '100%', height: 'auto' }}
-                />
-
-                {/* Status Overlay */}
-                {isCapturing && (
-                  <Chip
-                    label={t('enhancedAttendanceCamera.statusScanning')}
-                    color="error"
-                    size="small"
-                    sx={{
-                      position: 'absolute',
-                      top: 16,
-                      right: 16,
-                      animation: 'blink 1.5s linear infinite',
-                      '@keyframes blink': {
-                        '0%, 49%': { opacity: 1 },
-                        '50%, 100%': { opacity: 0.3 },
-                      },
+                >
+                  <Webcam
+                    ref={webcamRef}
+                    audio={false}
+                    screenshotFormat="image/jpeg"
+                    videoConstraints={{
+                      width: 1280,
+                      height: 720,
+                      facingMode: 'user',
                     }}
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                   />
-                )}
 
-                {/* Loading Indicator */}
-                {loading && (
-                  <Box
-                    sx={{
-                      position: 'absolute',
-                      top: 0,
-                      left: 0,
-                      right: 0,
-                      bottom: 0,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      backgroundColor: 'rgba(0,0,0,0.5)',
-                    }}
-                  >
-                    <CircularProgress size={60} />
-                  </Box>
-                )}
+                  {isCapturing && (
+                    <Box
+                      sx={{
+                        position: 'absolute',
+                        inset: 0,
+                        pointerEvents: 'none',
+                        '&::after': {
+                          content: '""',
+                          position: 'absolute',
+                          left: 0,
+                          right: 0,
+                          top: '-20%',
+                          height: 4,
+                          background: 'linear-gradient(90deg, transparent, #67e8f9, transparent)',
+                          boxShadow: '0 0 18px #67e8f9',
+                          animation: 'faceScanLineEnhanced 1.6s linear infinite',
+                        },
+                        '@keyframes faceScanLineEnhanced': {
+                          '0%': { top: '-10%' },
+                          '100%': { top: '110%' },
+                        },
+                      }}
+                    />
+                  )}
+
+                  {/* Status Overlay */}
+                  {isCapturing && (
+                    <Chip
+                      label={t('enhancedAttendanceCamera.statusScanning')}
+                      color="error"
+                      size="small"
+                      sx={{
+                        position: 'absolute',
+                        top: 16,
+                        right: 16,
+                        animation: 'blink 1.5s linear infinite',
+                        '@keyframes blink': {
+                          '0%, 49%': { opacity: 1 },
+                          '50%, 100%': { opacity: 0.3 },
+                        },
+                      }}
+                    />
+                  )}
+
+                  {/* Loading Indicator */}
+                  {loading && (
+                    <Box
+                      sx={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        backgroundColor: 'rgba(0,0,0,0.5)',
+                      }}
+                    >
+                      <CircularProgress size={60} />
+                    </Box>
+                  )}
+                </Box>
               </Box>
 
               {/* Controls */}
@@ -489,6 +535,7 @@ function EnhancedAttendanceCamera() {
                   <li>{t('enhancedAttendanceCamera.uiLookHint')}</li>
                   <li>{t('enhancedAttendanceCamera.uiLightHint')}</li>
                   <li>{t('enhancedAttendanceCamera.uiLeftHint')}</li>
+                  <li>{t('enhancedAttendanceCamera.uiAntiSpoofHint')}</li>
                   <li>{t('enhancedAttendanceCamera.uiAutoHint', { seconds: captureInterval / 1000 })}</li>
                   <li>{t('enhancedAttendanceCamera.uiAcceptHint')}</li>
                 </ul>

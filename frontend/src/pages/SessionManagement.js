@@ -66,14 +66,9 @@ function SessionManagement() {
   try {
     setLoading(true);
     const response = await attendanceAPI.getTodaySessions();
-    
-    console.log('📡 API Response:', response.data); // ← THÊM LOG
-    console.log('📊 Sessions count:', response.data.length);
-    
     setSessions(response.data);
     setError(null);
   } catch (err) {
-    console.error('❌ Error details:', err.response || err); // ← LOG CHI TIẾT
     setError(t('sessionManagement.loadSessionsFail'));
   } finally {
     setLoading(false);
@@ -123,17 +118,6 @@ function SessionManagement() {
     const sessionEnd = new Date(sessionStart.getTime() + 3 * 60 * 60 * 1000);
     return sessionEnd < new Date();
   });
-
-  // Thống kê cho buổi học
-  const getSessionStats = (sessionId) => {
-    // Đây là mock data, thực tế cần gọi API
-    return {
-      total: 50,
-      attended: 45,
-      late: 5,
-      absent: 5,
-    };
-  };
 
   const SessionTable = ({ sessions: sessionList }) => (
     <TableContainer>

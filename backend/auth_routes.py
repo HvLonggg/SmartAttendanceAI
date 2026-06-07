@@ -1318,6 +1318,8 @@ async def me(current=Depends(require_role("ADMIN", "TEACHER", "STUDENT"))):
             row = cursor.fetchone()
             profile = {}
             if row:
+                ad_raw = row[8]
+                ad = str(ad_raw).strip() if ad_raw is not None and str(ad_raw).strip() else None
                 profile = {
                     "ma_sv": row[0],
                     "ho_ten": row[1],
@@ -1326,6 +1328,7 @@ async def me(current=Depends(require_role("ADMIN", "TEACHER", "STUDENT"))):
                     "lop": row[4],
                     "khoa": row[5],
                     "trang_thai": row[7],
+                    "anh_dai_dien": ad,
                 }
             return MeResponse(
                 username=current["username"],
@@ -1394,6 +1397,15 @@ async def set_lock(
     locked = body.locked
     reason_in = (body.reason or "").strip() or None
     lock_reason = reason_in if locked else None
+
+    if locked:
+        cur_un = (current.get("username") or "").strip().lower()
+        if cur_un == (username or "").strip().lower():
+            raise HTTPException(
+                status_code=400,
+                detail="Không thể khóa chính tài khoản admin đang đăng nhập.",
+            )
+
     conn = get_connection()
     cursor = conn.cursor()
     try:

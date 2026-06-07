@@ -64,7 +64,7 @@ const readOnlyFieldProps = {
 
 export default function StudentProfilePage() {
   const navigate = useNavigate();
-  const { user, refreshUser } = useAuth();
+  const { user, refreshUser, avatarNonce } = useAuth();
   const ma_sv = user?.ma_sv;
   const { t, locale } = useI18n();
   const dateLocale = locale === 'en' ? 'en-US' : 'vi-VN';
@@ -74,7 +74,6 @@ export default function StudentProfilePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [student, setStudent] = useState(null);
-  const [avatarKey, setAvatarKey] = useState(0);
 
   const [profileHoTen, setProfileHoTen] = useState('');
   const [profileEmail, setProfileEmail] = useState('');
@@ -139,8 +138,8 @@ export default function StudentProfilePage() {
     try {
       setError(null);
       await studentAPI.uploadAvatar(ma_sv, file);
-      setAvatarKey((k) => k + 1);
       await loadAll();
+      await refreshUser();
     } catch (err) {
       setError(formatApiError(err.response?.data?.detail, t('studentProfilePage.uploadAvatarFail')));
     } finally {
@@ -152,8 +151,8 @@ export default function StudentProfilePage() {
     try {
       setError(null);
       await studentAPI.deleteAvatar(ma_sv);
-      setAvatarKey((k) => k + 1);
       await loadAll();
+      await refreshUser();
     } catch (err) {
       setError(formatApiError(err.response?.data?.detail, t('studentProfilePage.deleteAvatarFail')));
     }
@@ -199,7 +198,7 @@ export default function StudentProfilePage() {
     );
   }
 
-  const avatarSrc = getStudentAvatarSrc(student, avatarKey);
+  const avatarSrc = getStudentAvatarSrc(student, avatarNonce);
   const hasUploadedAvatar = Boolean(student?.anh_dai_dien);
 
   return (

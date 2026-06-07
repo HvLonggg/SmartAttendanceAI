@@ -15,6 +15,9 @@ const apiClient = axios.create({
 // Gắn JWT vào header (nếu có)
 apiClient.interceptors.request.use(
   (config) => {
+    if (config.data instanceof FormData) {
+      delete config.headers['Content-Type'];
+    }
     try {
       const token = localStorage.getItem('auth_token');
       if (token) {
@@ -129,6 +132,7 @@ export const studentPortalAPI = {
 // ==================== FACE RECOGNITION ====================
 
 export const recognitionAPI = {
+  /** Một khung — dùng cho Face ID Test (không kiểm tra liveness). */
   recognizeFace: (imageFile) => {
     const formData = new FormData();
     formData.append('file', imageFile);
@@ -139,6 +143,14 @@ export const recognitionAPI = {
       },
     });
   },
+
+  /** Nhiều khung liên tiếp — backend kiểm tra liveness (chống ảnh/video trên màn hình). */
+  recognizeLiveFrames: (formData) =>
+    apiClient.post('/recognize-live', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    }),
   
   recognizeFromBase64: (base64Image) => {
     // Convert base64 to blob
@@ -200,15 +212,21 @@ export const attendanceAPI = {
     params: { date }
   }),
   
-  checkin: (maSV, maBuoi, maXacThuc) =>
-    apiClient.post('/attendance/checkin', null, {
-      params: {
-        ma_sv: maSV,
-        ma_buoi: maBuoi,
-        ...(maXacThuc ? { ma_xac_thuc: maXacThuc } : {}),
-      },
-    }),
-  
+  checkin: (maSV, maBuoi, maXacThuc, imageFile, frameBlobs = []) => {
+    const fd = new FormData();
+    fd.append('ma_sv', maSV);
+    fd.append('ma_buoi', String(maBuoi));
+    if (maXacThuc) fd.append('ma_xac_thuc', maXacThuc);
+    (frameBlobs || []).forEach((b, i) => {
+      fd.append('frames', b, `live_${i}.jpg`);
+    });
+    if (imageFile) fd.append('image', imageFile);
+    return apiClient.post('/attendance/checkin', fd);
+  },
+
+  getCaptureBlob: (maDiemDanh) =>
+    apiClient.get(`/attendance/capture/${maDiemDanh}`, { responseType: 'blob' }),
+
   getSessionAttendance: (maBuoi) => 
     apiClient.get(`/attendance/session/${maBuoi}`),
   
@@ -226,7 +244,12 @@ export const teacherAPI = {
   createSession: (payload) => apiClient.post('/teacher/sessions', payload),
   updateSession: (maBuoi, payload) => apiClient.patch(`/teacher/sessions/${maBuoi}`, payload),
   deleteSession: (maBuoi) => apiClient.delete(`/teacher/sessions/${maBuoi}`),
+  getSessionAttendanceList: (maBuoi) => apiClient.get(`/teacher/sessions/${maBuoi}/attendance-list`),
+  saveManualAttendance: (maBuoi, items) =>
+    apiClient.post(`/teacher/sessions/${maBuoi}/manual-attendance`, { items }),
   getMyStudents: () => apiClient.get('/teacher/my-students'),
+  getStudentsBySessions: (days = 120) =>
+    apiClient.get('/teacher/students-by-sessions', { params: { days } }),
   getAnalyticsSummary: () => apiClient.get('/teacher/analytics/summary'),
   getAnalyticsOverview: () => apiClient.get('/teacher/analytics/overview'),
   getAttendanceTrend: (days = 7) =>
@@ -236,6 +259,8 @@ export const teacherAPI = {
     apiClient.get('/teacher/analytics/top-students', { params: { limit } }),
   getAtRiskStudents: () => apiClient.get('/teacher/analytics/at-risk-students'),
   getClassComparison: () => apiClient.get('/teacher/analytics/class-comparison'),
+  getRecentSessionStats: (days = 14) =>
+    apiClient.get('/teacher/analytics/recent-session-stats', { params: { days } }),
   getCareerHistory: () => apiClient.get('/teacher/career-history'),
 };
 
@@ -256,6 +281,11 @@ export const adminTeachingAPI = {
 export const analyticsAPI = {
   // Dashboard stats
   getDashboardStats: () => apiClient.get('/analytics/dashboard'),
+
+  getAnalyticsOverview: () => apiClient.get('/analytics/overview'),
+
+  getRecentSessionStats: (days = 14) =>
+    apiClient.get('/analytics/recent-session-stats', { params: { days } }),
   
   // Student analytics
   getStudentAnalytics: (maSV) => 

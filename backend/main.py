@@ -1,33 +1,46 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, date, time, timedelta
 import cv2
 import numpy as np
-import pickle
 import base64
 import os
 import io
 from PIL import Image
-import torch
-from facenet_pytorch import InceptionResnetV1
-from ultralytics import YOLO
-from sklearn.metrics.pairwise import cosine_similarity
 import pyodbc
+from pathlib import Path
 
 # Import training module
-from training_module import training_manager
+from training_module import training_manager, MAX_TRAINING_IMAGES_PER_STUDENT, TRAINING_IMAGES_BASELINE
+from face_db_store import load_face_database
+from face_pipeline import extract_embedding_from_bytes, aligned_face_rgb_u8_from_bgr, pipeline_status
+from face_occlusion import (
+    occlusion_api_fields,
+    check_face_occlusion_bgr,
+    MSG_UNKNOWN_FACE_NOT_IN_TRAINING,
+)
+from liveness_multiframe import verify_live_attendance_frames
 
 from auth_routes import auth_router as _auth_router, require_role
-from teacher_routes import teacher_router as _teacher_router, ensure_buoi_hoc_extra_columns
+from teacher_routes import (
+    teacher_router as _teacher_router,
+    ensure_buoi_hoc_extra_columns,
+    ensure_diem_danh_capture_column,
+    _teacher_owns_buoi,
+)
 from database.cntt_schema import run_cntt_schema_and_seed
 
 app = FastAPI(title="Smart Attendance AI API")
 
 # Cột buổi học: mã xác thực + thời gian điểm danh
 ensure_buoi_hoc_extra_columns()
+ensure_diem_danh_capture_column()
+
+ATTENDANCE_CAPTURES_DIR = Path(__file__).resolve().parent / "attendance_captures"
+ATTENDANCE_CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
 # Khoa, môn/lớp CNTT (seed tùy chọn), view vw_LopHocPhan_ChiTiet
 run_cntt_schema_and_seed()
 
@@ -50,31 +63,10 @@ print("=" * 60)
 app.include_router(_auth_router, prefix="/api/auth")
 app.include_router(_teacher_router, prefix="/api/teacher")
 
-# YOLO
-try:
-    yolo_model = YOLO("yolov8n.pt")
-    print("✅ YOLO loaded")
-except:
-    yolo_model = None
-    print("⚠️ YOLO not loaded")
+# MTCNN + FaceNet (face_pipeline) — không dùng YOLO COCO cho mặt (yolov8n.pt là class person, không phải face).
+print("✅ Face pipeline (MTCNN + FaceNet) — lazy load on first request")
 
-# FaceNet
-try:
-    facenet_model = InceptionResnetV1(pretrained='vggface2').eval()
-    print("✅ FaceNet loaded")
-except:
-    facenet_model = None
-    exit(1)
-
-# Face Database
-def load_face_database():
-    """Reload face database"""
-    db_path = "models/face_db.pkl"
-    if os.path.exists(db_path):
-        with open(db_path, "rb") as f:
-            return pickle.load(f)
-    return {}
-
+# Face Database (đường dẫn tuyệt đối + cache theo mtime — đồng bộ mọi luồng nhận diện sau khi train)
 face_database = load_face_database()
 print(f"✅ Face DB: {len(face_database)} identities")
 print("=" * 60)
@@ -199,6 +191,75 @@ def _student_ma_sv_from_auth(current: dict) -> str:
     return ma
 
 
+def _session_checkin_eligibility(
+    ngay_hoc,
+    gio_bat_dau,
+    phut_dung_raw,
+    phut_max_raw,
+    da_diem_danh: bool,
+) -> Dict[str, Any]:
+    """Cờ hiển thị UI — khớp cửa sổ thời gian với POST /api/attendance/checkin."""
+    if da_diem_danh:
+        return {
+            "da_diem_danh": True,
+            "co_the_quet": False,
+            "khoang_dung_gio": False,
+            "phase": "da_quet",
+            "goi_y": "Bạn đã điểm danh buổi học này.",
+        }
+    phut_dung = int(phut_dung_raw) if phut_dung_raw is not None else 15
+    phut_max = int(phut_max_raw) if phut_max_raw is not None else 60
+
+    if isinstance(ngay_hoc, datetime):
+        d = ngay_hoc.date()
+    elif isinstance(ngay_hoc, date):
+        d = ngay_hoc
+    else:
+        d = datetime.now().date()
+
+    if isinstance(gio_bat_dau, str):
+        parts = gio_bat_dau.split(":")
+        gt = time(int(parts[0]), int(parts[1]), int(parts[2]) if len(parts) > 2 else 0)
+    elif gio_bat_dau is not None:
+        gt = gio_bat_dau
+    else:
+        gt = time(0, 0, 0)
+
+    start_dt = datetime.combine(d, gt)
+    now = datetime.now()
+    delta_min = (now - start_dt).total_seconds() / 60.0
+
+    if delta_min < -10:
+        return {
+            "da_diem_danh": False,
+            "co_the_quet": False,
+            "khoang_dung_gio": False,
+            "phase": "chua_mo",
+            "goi_y": "Chưa đến giờ mở điểm danh (mở trước 10 phút so với giờ bắt đầu buổi).",
+        }
+    if delta_min > phut_max:
+        return {
+            "da_diem_danh": False,
+            "co_the_quet": False,
+            "khoang_dung_gio": False,
+            "phase": "het_han",
+            "goi_y": f"Đã quá {phut_max} phút kể từ giờ bắt đầu — không thể điểm danh.",
+        }
+
+    on_time = delta_min <= phut_dung
+    return {
+        "da_diem_danh": False,
+        "co_the_quet": True,
+        "khoang_dung_gio": on_time,
+        "phase": "dung_gio" if on_time else "tre",
+        "goi_y": (
+            "Đang trong khung đúng giờ — hãy điểm danh ngay."
+            if on_time
+            else "Vẫn quét được nhưng sẽ ghi nhận trễ."
+        ),
+    }
+
+
 def _lhp_table_columns(cursor) -> set:
     cursor.execute(
         """
@@ -277,93 +338,164 @@ def _catalog_dict_from_row(row) -> dict:
 
 # ==================== AI FUNCTIONS ====================
 
-def detect_and_align_face(image):
-    """Detect face và align để tăng độ chính xác"""
-    if yolo_model is None:
-        return image
-    
-    try:
-        results = yolo_model(image, verbose=False)
-        
-        if len(results[0].boxes) > 0:
-            box = results[0].boxes.xyxy[0].cpu().numpy()
-            x1, y1, x2, y2 = map(int, box)
-            
-            # Add margin
-            h, w = image.shape[:2]
-            margin = int((x2 - x1) * 0.2)
-            x1 = max(0, x1 - margin)
-            y1 = max(0, y1 - margin)
-            x2 = min(w, x2 + margin)
-            y2 = min(h, y2 + margin)
-            
-            face = image[y1:y2, x1:x2]
-            return face
-    except:
-        pass
-    
-    return image
-
 def extract_embedding_high_quality(image_bytes):
-    """Extract embedding với độ chính xác cao"""
-    try:
-        nparr = np.frombuffer(image_bytes, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        
-        if img is None:
-            return None, "Invalid image"
-        
-        # Detect and crop face
-        face = detect_and_align_face(img)
-        
-        # Convert to RGB
-        face_rgb = cv2.cvtColor(face, cv2.COLOR_BGR2RGB)
-        
-        # Resize to 160x160
-        face_resized = cv2.resize(face_rgb, (160, 160))
-        
-        # Normalize
-        face_tensor = torch.from_numpy(face_resized).permute(2, 0, 1).float()
-        face_tensor = face_tensor.unsqueeze(0) / 255.0
-        
-        # Extract
-        with torch.no_grad():
-            embedding = facenet_model(face_tensor).cpu().numpy()[0]
-        
-        return embedding, None
-        
-    except Exception as e:
-        return None, str(e)
+    """Trích embedding: MTCNN căn mặt + FaceNet (đồng bộ với training_module)."""
+    return extract_embedding_from_bytes(image_bytes)
 
-def recognize_with_high_accuracy(embedding, threshold=0.65):
-    """Nhận diện với độ chính xác cao"""
+
+MSG_SINHVIEN_RECORD_MISSING = (
+    "Không tìm thấy hồ sơ sinh viên trong hệ thống quản lý. Vui lòng liên hệ quản trị viên."
+)
+
+
+def _mask_block_response_from_bytes(image_bytes: bytes, extra: Optional[dict] = None) -> Optional[dict]:
+    """
+    Kiểm tra khẩu trang/che mặt lần cuối — luôn ưu tiên hơn mọi kết quả nhận diện.
+    Trả dict response API nếu bị chặn; None nếu không chặn.
+    """
+    nparr = np.frombuffer(image_bytes, dtype=np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        return None
+    aligned = aligned_face_rgb_u8_from_bgr(img)
+    if aligned is None:
+        return None
+    blocked, _kind, occ_msg = check_face_occlusion_bgr(img, aligned)
+    if not blocked or not occ_msg:
+        return None
+    payload = {
+        "success": False,
+        "message": occ_msg,
+        "identity": None,
+        "confidence": 0,
+        **occlusion_api_fields(occ_msg),
+    }
+    if extra:
+        payload.update(extra)
+    return payload
+
+
+def _l2_normalize_flat(vec: np.ndarray) -> np.ndarray:
+    v = np.asarray(vec, dtype=np.float64).reshape(-1)
+    n = np.linalg.norm(v)
+    if n < 1e-12:
+        return v.astype(np.float32)
+    return (v / n).astype(np.float32)
+
+
+def _aggregate_embeddings(embeddings: List[np.ndarray]) -> Optional[np.ndarray]:
+    """
+    Gộp nhiều embedding thành một vector ổn định hơn cho nhận diện.
+    Cách làm robust:
+    - L2-normalize từng frame
+    - Chấm độ nhất quán của mỗi frame với các frame còn lại
+    - Giữ nhóm frame nhất quán nhất rồi mới lấy trung bình
+    """
+    if not embeddings:
+        return None
+    arr = np.asarray([_l2_normalize_flat(e) for e in embeddings], dtype=np.float32)
+    if arr.shape[0] == 1:
+        return _l2_normalize_flat(arr[0])
+
+    # Ma trận cosine vì vector đã L2-normalize.
+    sim = arr @ arr.T
+    np.fill_diagonal(sim, 0.0)
+    consistency = np.mean(sim, axis=1)
+
+    # Giữ phần lớn frame ổn định, bỏ frame nhiễu/outlier.
+    keep_n = int(np.clip(int(np.ceil(arr.shape[0] * 0.7)), 2, arr.shape[0]))
+    keep_idx = np.argsort(consistency)[-keep_n:]
+    stable = arr[keep_idx]
+
+    mean_vec = np.mean(stable, axis=0)
+    return _l2_normalize_flat(mean_vec)
+
+
+def _parse_face_db_entry(entry: Any) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Chuẩn hóa bản ghi face_db về (centroid, samples).
+    Hỗ trợ cả format cũ (vector) và mới ({centroid, samples}).
+    """
+    if isinstance(entry, dict):
+        c = _l2_normalize_flat(np.asarray(entry.get("centroid")))
+        s_raw = entry.get("samples")
+        if s_raw is None:
+            return c, c.reshape(1, -1)
+        s = np.asarray(s_raw, dtype=np.float32)
+        if s.ndim == 1:
+            s = s.reshape(1, -1)
+        s = s / np.clip(np.linalg.norm(s, axis=1, keepdims=True), 1e-12, None)
+        return c, s.astype(np.float32)
+    c = _l2_normalize_flat(np.asarray(entry))
+    return c, c.reshape(1, -1)
+
+
+def recognize_with_high_accuracy(embedding, threshold: Optional[float] = None):
+    """
+    So khớp cosine trên vector đã L2-normalize (tương đương dot product).
+    RECOGNITION_THRESHOLD (mặc định 0.52): tăng nếu muốn ít chấp nhận nhầm hơn.
+    RECOGNITION_TOP_MARGIN: khoảng cách tối thiểu top1 - top2 để tránh nhầm giữa 2 người giống nhau.
+    Score dùng tổng hợp: alpha*centroid + (1-alpha)*best_sample (mặc định alpha=0.50).
+    """
     global face_database
-    
-    # Reload database to get latest
+
     face_database = load_face_database()
-    
+
     if not face_database or embedding is None:
         return "Unknown", 0.0, []
-    
+
+    thr = float(os.environ.get("RECOGNITION_THRESHOLD", "0.50")) if threshold is None else float(threshold)
+    margin_need = float(os.environ.get("RECOGNITION_TOP_MARGIN", "0.005"))
+
+    q = _l2_normalize_flat(embedding)
     scores = []
-    
+
+    alpha = float(os.environ.get("RECOGNITION_ALPHA_CENTROID", "0.50"))
+    alpha = min(1.0, max(0.0, alpha))
+
     for name, db_emb in face_database.items():
         try:
-            score = cosine_similarity(
-                embedding.reshape(1, -1),
-                db_emb.reshape(1, -1)
-            )[0][0]
-            scores.append((name, score))
-        except:
+            centroid, samples = _parse_face_db_entry(db_emb)
+            s_centroid = float(np.dot(q, centroid))
+            s_samples = samples @ q.reshape(-1, 1)
+            s_best = float(np.max(s_samples))
+            score = alpha * s_centroid + (1.0 - alpha) * s_best
+            scores.append((name, score, s_centroid, s_best))
+        except Exception:
             continue
-    
-    # Sort by score
+
     scores.sort(key=lambda x: x[1], reverse=True)
-    
-    if not scores or scores[0][1] < threshold:
-        return "Unknown", scores[0][1] if scores else 0.0, scores[:5]
-    
-    return scores[0][0], scores[0][1], scores[:5]
+
+    if not scores or scores[0][1] < thr:
+        return "Unknown", scores[0][1] if scores else 0.0, [(x[0], x[1]) for x in scores[:5]]
+
+    if len(scores) >= 2:
+        gap = scores[0][1] - scores[1][1]
+        # Nếu top1 đủ cao vượt ngưỡng nhiều thì vẫn cho qua dù gap nhỏ
+        # (tránh reject nhầm trong điều kiện ánh sáng/độ phân giải không ổn định).
+        strong_top1_bonus = float(os.environ.get("RECOGNITION_STRONG_TOP1_BONUS", "0.03"))
+        if gap < margin_need and scores[0][1] < (thr + strong_top1_bonus):
+            return "Unknown", scores[0][1], [(x[0], x[1]) for x in scores[:5]]
+
+    return scores[0][0], scores[0][1], [(x[0], x[1]) for x in scores[:5]]
+
+
+def _calibrate_confidence(raw_conf: float, top_matches: List[Tuple[str, float]]) -> float:
+    """
+    Hiệu chỉnh confidence để phản ánh trực quan tốt hơn:
+    - Nền tảng vẫn là cosine score thật (raw_conf)
+    - Cộng thêm một phần nhỏ theo độ tách top1-top2 (gap) để tăng điểm khi nhận diện rõ ràng
+    - Kẹp biên để tránh 100% ảo
+    """
+    base = float(np.clip(raw_conf, 0.0, 1.0))
+    gap = 0.0
+    if len(top_matches) >= 2:
+        gap = max(0.0, float(top_matches[0][1]) - float(top_matches[1][1]))
+
+    # Nâng nhẹ trong vùng dùng thực tế (đặc biệt khi ánh sáng tốt + top1 tách rõ).
+    # Tăng thêm một nấc boost để % hiển thị cao hơn trong điều kiện nhận diện tốt.
+    boosted = base + (0.165 * gap) + (0.135 * max(0.0, base - 0.42))
+    return float(np.clip(boosted, 0.0, 0.998))
 
 # ==================== ENDPOINTS ====================
 
@@ -372,8 +504,7 @@ async def root():
     return {
         "message": "Smart Attendance AI API",
         "status": "running",
-        "yolo_loaded": yolo_model is not None,
-        "facenet_loaded": facenet_model is not None,
+        "face_pipeline": pipeline_status(),
         "face_database": {
             "loaded": len(face_database) > 0,
             "count": len(face_database),
@@ -1361,11 +1492,19 @@ async def student_my_sessions(limit: int = 300, current=Depends(require_role("ST
                 mh.TenMon,
                 lhp.GiangVien,
                 lhp.MaGV,
-                gv.HoTen
+                gv.HoTen,
+                bh.PhutHetHanDungGio,
+                bh.PhutHetHanDiemDanh,
+                dd.MaDiemDanh
             FROM BuoiHoc bh
-            INNER JOIN DangKyHoc dk ON dk.MaLHP = bh.MaLHP AND dk.MaSV = ?
-            JOIN LopHocPhan lhp ON bh.MaLHP = lhp.MaLHP
+            INNER JOIN DangKyHoc dk
+                ON LTRIM(RTRIM(dk.MaLHP)) = LTRIM(RTRIM(bh.MaLHP))
+                AND LTRIM(RTRIM(dk.MaSV)) = LTRIM(RTRIM(?))
+            JOIN LopHocPhan lhp ON LTRIM(RTRIM(bh.MaLHP)) = LTRIM(RTRIM(lhp.MaLHP))
             JOIN MonHoc mh ON lhp.MaMon = mh.MaMon
+            LEFT JOIN dbo.DiemDanh dd
+                ON dd.MaBuoi = bh.MaBuoi
+                AND LTRIM(RTRIM(dd.MaSV)) = LTRIM(RTRIM(dk.MaSV))
             LEFT JOIN dbo.GiangVien gv
                 ON lhp.MaGV IS NOT NULL
                 AND LTRIM(RTRIM(lhp.MaGV)) = LTRIM(RTRIM(gv.MaGV))
@@ -1380,6 +1519,10 @@ async def student_my_sessions(limit: int = 300, current=Depends(require_role("ST
             if gio and not isinstance(gio, str):
                 gio = gio.strftime("%H:%M:%S")
             gv_show = (row[7] or "").strip() or (row[5] or "").strip() or "—"
+            da_quet = row[10] is not None
+            elig = _session_checkin_eligibility(
+                row[2], row[3], row[8], row[9], da_quet
+            )
             sessions.append(
                 {
                     "ma_buoi": row[0],
@@ -1388,6 +1531,11 @@ async def student_my_sessions(limit: int = 300, current=Depends(require_role("ST
                     "gio_bat_dau": gio,
                     "ten_mon": row[4],
                     "giang_vien": gv_show,
+                    "da_diem_danh": elig["da_diem_danh"],
+                    "co_the_quet": elig["co_the_quet"],
+                    "khoang_dung_gio": elig["khoang_dung_gio"],
+                    "phase_diem_danh": elig["phase"],
+                    "goi_y_diem_danh": elig["goi_y"],
                 }
             )
         return sessions
@@ -1531,6 +1679,15 @@ async def student_list_own_feedbacks(current=Depends(require_role("STUDENT"))):
 async def upload_training_image(ma_sv: str, file: UploadFile = File(...)):
     """Upload ảnh training cho sinh viên"""
     try:
+        n_existing = len(training_manager.get_training_images(ma_sv))
+        if n_existing >= MAX_TRAINING_IMAGES_PER_STUDENT:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Đã đạt tối đa {MAX_TRAINING_IMAGES_PER_STUDENT} ảnh huấn luyện / sinh viên. "
+                    "Xóa bớt ảnh cũ trước khi thêm."
+                ),
+            )
         contents = await file.read()
         filepath, error = training_manager.save_training_image(ma_sv, contents)
         
@@ -1552,7 +1709,8 @@ async def get_training_images(ma_sv: str):
     return {
         "ma_sv": ma_sv,
         "count": len(images),
-        "images": images
+        "max_images": MAX_TRAINING_IMAGES_PER_STUDENT,
+        "images": images,
     }
 
 @app.get("/api/training/image/{ma_sv}/{filename}")
@@ -1586,7 +1744,20 @@ async def train_student_model(ma_sv: str):
     # Reload face database
     global face_database
     face_database = load_face_database()
-    
+
+    # Lấy tổng số sinh viên thật trong hệ thống (admin thêm mới thì số này tăng).
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM SinhVien")
+        row = cursor.fetchone()
+        db_students = int(row[0]) if row and row[0] is not None else 0
+        result["system_students_count"] = max(int(TRAINING_IMAGES_BASELINE), db_students)
+        cursor.close()
+        conn.close()
+    except Exception:
+        result["system_students_count"] = int(TRAINING_IMAGES_BASELINE)
+
     return result
 
 @app.get("/api/training/status/{ma_sv}")
@@ -1598,8 +1769,9 @@ async def get_training_status(ma_sv: str):
     return {
         "ma_sv": ma_sv,
         "training_images_count": len(images),
+        "max_training_images": MAX_TRAINING_IMAGES_PER_STUDENT,
         "in_database": ma_sv in db_info["identities"],
-        "ready_to_recognize": ma_sv in db_info["identities"] and len(images) >= 5
+        "ready_to_recognize": ma_sv in db_info["identities"] and len(images) >= 5,
     }
 
 @app.delete("/api/training/remove/{ma_sv}")
@@ -1620,8 +1792,13 @@ async def remove_student_training(ma_sv: str):
 async def recognize_face_endpoint(file: UploadFile = File(...)):
     """Nhận diện khuôn mặt - Độ chính xác cao"""
     try:
+        load_face_database()
         contents = await file.read()
-        
+
+        mask_block = _mask_block_response_from_bytes(contents)
+        if mask_block:
+            return mask_block
+
         # Extract embedding
         embedding, error = extract_embedding_high_quality(contents)
         
@@ -1630,18 +1807,29 @@ async def recognize_face_endpoint(file: UploadFile = File(...)):
                 "success": False,
                 "message": error,
                 "identity": None,
-                "confidence": 0
+                "confidence": 0,
+                **occlusion_api_fields(error),
             }
+
+        mask_block = _mask_block_response_from_bytes(contents)
+        if mask_block:
+            return mask_block
         
         # Recognize
         identity, confidence, top_matches = recognize_with_high_accuracy(embedding)
+        confidence_ui = _calibrate_confidence(confidence, top_matches)
+
+        mask_block = _mask_block_response_from_bytes(contents)
+        if mask_block:
+            return mask_block
         
         if identity == "Unknown":
             return {
                 "success": False,
-                "message": "Không nhận diện được",
+                "unknown_face_not_in_training": True,
+                "message": MSG_UNKNOWN_FACE_NOT_IN_TRAINING,
                 "identity": None,
-                "confidence": confidence,
+                "confidence": float(confidence_ui),
                 "top_matches": [{"identity": m[0], "score": float(m[1])} for m in top_matches]
             }
         
@@ -1654,11 +1842,15 @@ async def recognize_face_endpoint(file: UploadFile = File(...)):
         conn.close()
         
         if row:
+            # Online learning: cộng dồn mẫu từ lần nhận diện chắc chắn để cải thiện dần độ ổn định.
+            training_manager.append_online_sample(identity, embedding, confidence)
+            global face_database
+            face_database = load_face_database()
             st = sinhvien_row_to_student(row)
             return {
                 "success": True,
                 "identity": identity,
-                "confidence": float(confidence),
+                "confidence": float(confidence_ui),
                 "student_info": {
                     "ma_sv": st.ma_sv,
                     "ho_ten": st.ho_ten,
@@ -1674,13 +1866,146 @@ async def recognize_face_endpoint(file: UploadFile = File(...)):
         
         return {
             "success": False,
-            "message": "Nhận diện được nhưng không có trong database",
+            "sinhvien_record_missing": True,
+            "message": MSG_SINHVIEN_RECORD_MISSING,
             "identity": identity,
-            "confidence": float(confidence)
+            "confidence": float(confidence_ui)
         }
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/recognize-live")
+async def recognize_live_endpoint(frames: List[UploadFile] = File(...)):
+    """
+    Điểm danh / nhận diện qua webcam: bắt buộc nhiều khung liên tiếp + kiểm tra liveness
+    (hạn chế ảnh/video hiển thị trên màn hình thiết bị). Ảnh cuối dùng để trích embedding danh tính.
+    """
+    try:
+        load_face_database()
+        if not frames:
+            return {
+                "success": False,
+                "liveness_failed": True,
+                "message": "Cần gửi ít nhất 3 ảnh liên tiếp từ webcam (trường form: frames).",
+                "identity": None,
+                "confidence": 0,
+            }
+
+        raw: List[bytes] = []
+        for uf in frames:
+            raw.append(await uf.read())
+
+        ok, lmsg = verify_live_attendance_frames(raw)
+        if not ok:
+            occ_fields = occlusion_api_fields(lmsg)
+            if occ_fields:
+                return {
+                    "success": False,
+                    "liveness_failed": False,
+                    "message": lmsg,
+                    "identity": None,
+                    "confidence": 0,
+                    **occ_fields,
+                }
+            return {
+                "success": False,
+                "liveness_failed": True,
+                "screen_replay_blocked": True,
+                "message": lmsg,
+                "identity": None,
+                "confidence": 0,
+            }
+
+        # Nhận diện từ nhiều frame để giảm nhiễu/nhòe của từng ảnh đơn lẻ.
+        emb_list: List[np.ndarray] = []
+        last_error = None
+        for b in raw:
+            emb_i, err_i = extract_embedding_high_quality(b)
+            if emb_i is not None:
+                emb_list.append(emb_i)
+            else:
+                last_error = err_i
+
+        embedding = _aggregate_embeddings(emb_list)
+        if embedding is None:
+            return {
+                "success": False,
+                "liveness_failed": False,
+                "message": last_error or "Không trích được đặc trưng khuôn mặt.",
+                "identity": None,
+                "confidence": 0,
+                **occlusion_api_fields(last_error),
+            }
+
+        for b in raw:
+            mask_block = _mask_block_response_from_bytes(b, {"liveness_failed": False})
+            if mask_block:
+                return mask_block
+
+        identity, confidence, top_matches = recognize_with_high_accuracy(embedding)
+        confidence_ui = _calibrate_confidence(confidence, top_matches)
+
+        for b in raw:
+            mask_block = _mask_block_response_from_bytes(b, {"liveness_failed": False})
+            if mask_block:
+                return mask_block
+
+        if identity == "Unknown":
+            return {
+                "success": False,
+                "liveness_failed": False,
+                "unknown_face_not_in_training": True,
+                "message": MSG_UNKNOWN_FACE_NOT_IN_TRAINING,
+                "identity": None,
+                "confidence": float(confidence_ui),
+                "top_matches": [{"identity": m[0], "score": float(m[1])} for m in top_matches],
+            }
+
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM SinhVien WHERE MaSV = ?", (identity,))
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+
+        if row:
+            # Online learning: cộng dồn mẫu từ lần nhận diện chắc chắn để cải thiện dần độ ổn định.
+            training_manager.append_online_sample(identity, embedding, confidence)
+            global face_database
+            face_database = load_face_database()
+            st = sinhvien_row_to_student(row)
+            return {
+                "success": True,
+                "liveness_ok": True,
+                "identity": identity,
+                "confidence": float(confidence_ui),
+                "student_info": {
+                    "ma_sv": st.ma_sv,
+                    "ho_ten": st.ho_ten,
+                    "ngay_sinh": st.ngay_sinh.isoformat() if st.ngay_sinh else None,
+                    "gioi_tinh": st.gioi_tinh,
+                    "lop": st.lop,
+                    "khoa": st.khoa,
+                    "email": st.email,
+                    "anh_dai_dien": st.anh_dai_dien,
+                },
+                "top_matches": [{"identity": m[0], "score": float(m[1])} for m in top_matches[:3]],
+            }
+
+        return {
+            "success": False,
+            "liveness_ok": True,
+            "sinhvien_record_missing": True,
+            "message": MSG_SINHVIEN_RECORD_MISSING,
+            "identity": identity,
+            "confidence": float(confidence_ui),
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # ==================== SESSION APIs ====================
 
@@ -1796,15 +2121,107 @@ async def get_sessions_by_date(date: str = None):
 # ==================== ATTENDANCE APIs ====================
 
 @app.post("/api/attendance/checkin")
-async def checkin_attendance(
-    ma_sv: str,
-    ma_buoi: int,
-    ma_xac_thuc: Optional[str] = None,
-):
+async def checkin_attendance(request: Request):
     """
-    Điểm danh: sinh viên phải thuộc LHP của buổi; nếu buổi có MaXacThucBuoi thì phải nhập đúng mã.
-    Thời gian: trong PhutHetHanDungGio phút đầu sau giờ bắt đầu = Đúng giờ; sau đó đến PhutHetHanDiemDanh = Trễ; quá hạn = không điểm danh được.
+    Điểm danh: multipart/form-data (ma_sv, ma_buoi, ma_xac_thuc?, frames[], image?).
+    Bắt buộc gửi tối thiểu 3 khung webcam liên tiếp để xác minh người thật và khớp ma_sv.
+    Ảnh chụp (JPEG/PNG) tùy chọn — lưu kèm bản ghi để GV xem lại.
     """
+    ct = (request.headers.get("content-type") or "").lower()
+    image_bytes: Optional[bytes] = None
+    live_frames_bytes: List[bytes] = []
+
+    if "multipart/form-data" in ct:
+        form = await request.form()
+        ma_sv = (str(form.get("ma_sv") or "")).strip()
+        try:
+            ma_buoi = int(form.get("ma_buoi"))
+        except (TypeError, ValueError):
+            ma_buoi = None
+        mxt = form.get("ma_xac_thuc")
+        ma_xac_thuc = (str(mxt).strip() if mxt not in (None, "") else None) or None
+        if ma_xac_thuc == "":
+            ma_xac_thuc = None
+        frame_uploads = form.getlist("frames") if hasattr(form, "getlist") else []
+        if not frame_uploads:
+            single_frame = form.get("frames")
+            if single_frame is not None:
+                frame_uploads = [single_frame]
+        for fu in frame_uploads:
+            if fu is not None and hasattr(fu, "read"):
+                raw_f = await fu.read()
+                if raw_f:
+                    if len(raw_f) > 5 * 1024 * 1024:
+                        raise HTTPException(status_code=400, detail="Ảnh điểm danh quá lớn (tối đa 5MB)")
+                    live_frames_bytes.append(raw_f)
+        up = form.get("image")
+        if up is not None and hasattr(up, "read"):
+            raw = await up.read()
+            if raw and len(raw) > 5 * 1024 * 1024:
+                raise HTTPException(status_code=400, detail="Ảnh điểm danh quá lớn (tối đa 5MB)")
+            image_bytes = raw if raw else None
+    else:
+        ma_sv = (request.query_params.get("ma_sv") or "").strip()
+        try:
+            ma_buoi = int(request.query_params.get("ma_buoi"))
+        except (TypeError, ValueError):
+            ma_buoi = None
+        mxt = request.query_params.get("ma_xac_thuc")
+        ma_xac_thuc = (mxt or "").strip() or None
+
+    if not ma_sv or ma_buoi is None:
+        raise HTTPException(status_code=400, detail="Thiếu ma_sv hoặc ma_buoi")
+
+    min_live_frames = int(os.environ.get("LIVE_MIN_FRAMES", "3"))
+    if len(live_frames_bytes) < min_live_frames:
+        return {
+            "success": False,
+            "liveness_failed": True,
+            "message": (
+                f"Cần tối thiểu {min_live_frames} khung hình liên tiếp từ webcam để xác minh người thật khi điểm danh. "
+                "Không chấp nhận điểm danh bằng ảnh hoặc video hiển thị trên thiết bị khác."
+            ),
+        }
+
+    ok_live, live_msg = verify_live_attendance_frames(live_frames_bytes)
+    if not ok_live:
+        occ_fields = occlusion_api_fields(live_msg)
+        if occ_fields:
+            return {"success": False, "message": live_msg, **occ_fields}
+        return {
+            "success": False,
+            "liveness_failed": True,
+            "screen_replay_blocked": True,
+            "message": live_msg,
+        }
+
+    load_face_database()
+    emb_list: List[np.ndarray] = []
+    for fb in live_frames_bytes:
+        emb_i, _err_i = extract_embedding_high_quality(fb)
+        if emb_i is not None:
+            emb_list.append(emb_i)
+    check_emb = _aggregate_embeddings(emb_list)
+    if check_emb is None:
+        return {
+            "success": False,
+            "message": "Không trích được đặc trưng khuôn mặt để xác minh điểm danh. Vui lòng thử lại.",
+        }
+    check_identity, check_conf, _ = recognize_with_high_accuracy(check_emb)
+    if check_identity == "Unknown" or str(check_identity).strip() != ma_sv:
+        return {
+            "success": False,
+            "liveness_failed": True,
+            "screen_replay_blocked": True,
+            "message": (
+                "Hệ thống phát hiện khuôn mặt không khớp tài khoản sinh viên hoặc có dấu hiệu ảnh/video "
+                "từ điện thoại, laptop hoặc thiết bị khác. Không chấp nhận điểm danh."
+            ),
+        }
+
+    if image_bytes is None and live_frames_bytes:
+        image_bytes = live_frames_bytes[-1]
+
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -1879,13 +2296,33 @@ async def checkin_attendance(
         else:
             trang_thai = "Trễ"
 
+        quet_at = datetime.now()
         cursor.execute(
             """
             INSERT INTO DiemDanh (MaSV, MaBuoi, ThoiGianQuet, TrangThai, NguonQuet)
+            OUTPUT INSERTED.MaDiemDanh
             VALUES (?, ?, ?, ?, ?)
             """,
-            (ma_sv, ma_buoi, datetime.now(), trang_thai, "Webcam"),
+            (ma_sv, ma_buoi, quet_at, trang_thai, "Webcam"),
         )
+        ins = cursor.fetchone()
+        ma_diem_danh = int(ins[0]) if ins else None
+
+        saved_name = None
+        if image_bytes and ma_diem_danh is not None:
+            ext = ".jpg"
+            head = image_bytes[:16]
+            if head.startswith(b"\x89PNG\r\n\x1a\n"):
+                ext = ".png"
+            saved_name = f"dd_{ma_diem_danh}{ext}"
+            try:
+                (ATTENDANCE_CAPTURES_DIR / saved_name).write_bytes(image_bytes)
+                cursor.execute(
+                    "UPDATE dbo.DiemDanh SET AnhDiemDanh = ? WHERE MaDiemDanh = ?",
+                    (saved_name, ma_diem_danh),
+                )
+            except OSError:
+                saved_name = None
 
         conn.commit()
 
@@ -1893,12 +2330,62 @@ async def checkin_attendance(
             "success": True,
             "message": f"Điểm danh thành công - {trang_thai}",
             "trang_thai": trang_thai,
-            "thoi_gian": datetime.now().isoformat(),
+            "thoi_gian": quet_at.isoformat(),
+            "ma_diem_danh": ma_diem_danh,
+            "co_anh": bool(saved_name),
         }
 
     finally:
         cursor.close()
         conn.close()
+
+@app.get("/api/attendance/capture/{ma_diem_danh}")
+async def get_attendance_capture(
+    ma_diem_danh: int,
+    current=Depends(require_role("ADMIN", "TEACHER", "STUDENT")),
+):
+    """Ảnh điểm danh đã lưu — GV (buổi của mình), SV (của chính mình), Admin."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    path = None
+    fn = ""
+    try:
+        cursor.execute(
+            """
+            SELECT dd.AnhDiemDanh, dd.MaSV, dd.MaBuoi
+            FROM dbo.DiemDanh dd
+            WHERE dd.MaDiemDanh = ?
+            """,
+            (ma_diem_danh,),
+        )
+        row = cursor.fetchone()
+        if not row or not row[0]:
+            raise HTTPException(status_code=404, detail="Không có ảnh điểm danh")
+        fn = (row[0] or "").strip()
+        ma_sv_row = (row[1] or "").strip()
+        ma_buoi = row[2]
+        if ".." in fn or "/" in fn or "\\" in fn:
+            raise HTTPException(status_code=400, detail="Tên file không hợp lệ")
+        path = ATTENDANCE_CAPTURES_DIR / fn
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="File ảnh không còn trên máy chủ")
+
+        role = (current.get("role") or "").upper()
+        if role == "STUDENT":
+            if (current.get("ma_sv") or "").strip() != ma_sv_row:
+                raise HTTPException(status_code=403, detail="Không được xem ảnh điểm danh này")
+        elif role == "TEACHER":
+            mgv = (current.get("ma_gv") or "").strip()
+            if not mgv or not _teacher_owns_buoi(cursor, mgv, int(ma_buoi)):
+                raise HTTPException(status_code=403, detail="Không được xem ảnh buổi học này")
+    finally:
+        cursor.close()
+        conn.close()
+
+    media = "image/jpeg"
+    if fn.lower().endswith(".png"):
+        media = "image/png"
+    return FileResponse(path, media_type=media, filename=fn)
 
 @app.get("/api/attendance/session/{ma_buoi}")
 async def get_session_attendance(ma_buoi: int):
@@ -1907,7 +2394,7 @@ async def get_session_attendance(ma_buoi: int):
     
     cursor.execute("""
         SELECT dd.MaDiemDanh, sv.MaSV, sv.HoTen, sv.Lop,
-               dd.ThoiGianQuet, dd.TrangThai, dd.NguonQuet
+               dd.ThoiGianQuet, dd.TrangThai, dd.NguonQuet, dd.AnhDiemDanh
         FROM DiemDanh dd
         JOIN SinhVien sv ON dd.MaSV = sv.MaSV
         WHERE dd.MaBuoi = ?
@@ -1916,6 +2403,8 @@ async def get_session_attendance(ma_buoi: int):
     
     records = []
     for row in cursor.fetchall():
+        anh = row[7] if len(row) > 7 else None
+        co_anh = bool(anh and str(anh).strip())
         records.append({
             "ma_diem_danh": row[0],
             "ma_sv": row[1],
@@ -1923,7 +2412,8 @@ async def get_session_attendance(ma_buoi: int):
             "lop": row[3],
             "thoi_gian_quet": row[4].isoformat() if row[4] else None,
             "trang_thai": row[5],
-            "nguon_quet": row[6]
+            "nguon_quet": row[6],
+            "co_anh": co_anh,
         })
     
     cursor.close()
@@ -1931,6 +2421,144 @@ async def get_session_attendance(ma_buoi: int):
     return records
 
 # ==================== ANALYTICS APIs - REAL DATA ====================
+
+@app.get("/api/analytics/overview")
+async def get_analytics_overview(current=Depends(require_role("ADMIN"))):
+    """4 ô tổng quan toàn hệ thống: TB chuyên cần, đủ ĐK, nguy cơ, tỷ lệ trễ (7 ngày)."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT AVG(CAST(sub.ty AS FLOAT))
+            FROM (
+                SELECT
+                    CAST(COUNT(DISTINCT dd.MaBuoi) * 100.0 /
+                         NULLIF(COUNT(DISTINCT bh.MaBuoi), 0) AS DECIMAL(5,2)) AS ty
+                FROM dbo.SinhVien sv
+                JOIN dbo.DangKyHoc dk ON sv.MaSV = dk.MaSV
+                JOIN dbo.LopHocPhan lhp ON dk.MaLHP = lhp.MaLHP
+                JOIN dbo.BuoiHoc bh ON lhp.MaLHP = bh.MaLHP
+                LEFT JOIN dbo.DiemDanh dd ON dd.MaSV = sv.MaSV AND dd.MaBuoi = bh.MaBuoi
+                WHERE sv.TrangThai = N'Đang học'
+                GROUP BY sv.MaSV
+                HAVING COUNT(DISTINCT bh.MaBuoi) > 0
+            ) sub
+            """
+        )
+        avg_cc = float(cursor.fetchone()[0] or 0)
+
+        cursor.execute(
+            """
+            SELECT
+                COUNT(*) AS total_sv,
+                SUM(CASE WHEN x.ty >= 80 THEN 1 ELSE 0 END) AS eligible,
+                SUM(CASE WHEN x.ty < 80 THEN 1 ELSE 0 END) AS at_risk
+            FROM (
+                SELECT
+                    CAST(COUNT(DISTINCT dd.MaBuoi) * 100.0 /
+                         NULLIF(COUNT(DISTINCT bh.MaBuoi), 0) AS DECIMAL(5,2)) AS ty
+                FROM dbo.SinhVien sv
+                JOIN dbo.DangKyHoc dk ON sv.MaSV = dk.MaSV
+                JOIN dbo.LopHocPhan lhp ON dk.MaLHP = lhp.MaLHP
+                JOIN dbo.BuoiHoc bh ON lhp.MaLHP = bh.MaLHP
+                LEFT JOIN dbo.DiemDanh dd ON dd.MaSV = sv.MaSV AND dd.MaBuoi = bh.MaBuoi
+                WHERE sv.TrangThai = N'Đang học'
+                GROUP BY sv.MaSV
+                HAVING COUNT(DISTINCT bh.MaBuoi) > 0
+            ) x
+            """
+        )
+        row = cursor.fetchone()
+        total_tracked = int(row[0] or 0)
+        eligible = int(row[1] or 0)
+        at_risk = int(row[2] or 0)
+
+        cursor.execute(
+            """
+            SELECT ISNULL(
+                CAST(SUM(CASE WHEN dd.TrangThai = N'Trễ' THEN 1 ELSE 0 END) AS FLOAT) * 100.0
+                / NULLIF(COUNT(*), 0), 0)
+            FROM dbo.DiemDanh dd
+            JOIN dbo.BuoiHoc bh ON dd.MaBuoi = bh.MaBuoi
+            WHERE bh.NgayHoc >= DATEADD(day, -7, CAST(GETDATE() AS DATE))
+            """
+        )
+        late_rate = float(cursor.fetchone()[0] or 0)
+
+        return {
+            "avg_attendance_rate": round(avg_cc, 2),
+            "eligible_count": eligible,
+            "tracked_students": total_tracked,
+            "eligible_ratio_text": f"{eligible}/{total_tracked}" if total_tracked else "0/0",
+            "eligible_ok_percent": round(100.0 * eligible / total_tracked, 2) if total_tracked else 0.0,
+            "at_risk_count": at_risk,
+            "late_rate_week": round(late_rate, 2),
+        }
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.get("/api/analytics/recent-session-stats")
+async def get_recent_session_stats(days: int = 14, current=Depends(require_role("ADMIN"))):
+    """Theo từng buổi toàn hệ thống: số SV đăng ký, số đã quét, đúng giờ / trễ / vắng."""
+    days = max(1, min(int(days or 14), 120))
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT
+                bh.MaBuoi,
+                bh.MaLHP,
+                mh.TenMon,
+                bh.NgayHoc,
+                bh.GioBatDau,
+                (SELECT COUNT(*) FROM dbo.DangKyHoc dk WHERE dk.MaLHP = bh.MaLHP) AS TongDK,
+                COUNT(dd.MaDiemDanh) AS SoQuet,
+                SUM(CASE WHEN dd.TrangThai IN (N'Đúng giờ', N'Có mặt') THEN 1 ELSE 0 END) AS DungGio,
+                SUM(CASE WHEN dd.TrangThai = N'Trễ' THEN 1 ELSE 0 END) AS Tre
+            FROM dbo.BuoiHoc bh
+            JOIN dbo.LopHocPhan lhp ON bh.MaLHP = lhp.MaLHP
+            JOIN dbo.MonHoc mh ON lhp.MaMon = mh.MaMon
+            LEFT JOIN dbo.DiemDanh dd ON dd.MaBuoi = bh.MaBuoi
+            WHERE bh.NgayHoc >= DATEADD(day, -?, CAST(GETDATE() AS DATE))
+              AND bh.NgayHoc <= CAST(GETDATE() AS DATE)
+            GROUP BY bh.MaBuoi, bh.MaLHP, mh.TenMon, bh.NgayHoc, bh.GioBatDau
+            ORDER BY bh.NgayHoc DESC, bh.GioBatDau DESC
+            """,
+            (days,),
+        )
+        out = []
+        for row in cursor.fetchall():
+            gio = row[4]
+            if gio and not isinstance(gio, str):
+                gio = gio.strftime("%H:%M:%S")
+            tong = int(row[5] or 0)
+            quet = int(row[6] or 0)
+            dg = int(row[7] or 0)
+            tr = int(row[8] or 0)
+            vang = max(0, tong - quet)
+            out.append(
+                {
+                    "ma_buoi": row[0],
+                    "ma_lhp": (row[1] or "").strip(),
+                    "ten_mon": row[2],
+                    "ngay_hoc": row[3].isoformat() if row[3] else None,
+                    "gio_bat_dau": gio,
+                    "tong_sv_dang_ky": tong,
+                    "so_luot_quet": quet,
+                    "dung_gio": dg,
+                    "tre": tr,
+                    "vang_uoc": vang,
+                }
+            )
+        return out
+    finally:
+        cursor.close()
+        conn.close()
+
 
 @app.get("/api/analytics/dashboard")
 async def get_dashboard_stats():

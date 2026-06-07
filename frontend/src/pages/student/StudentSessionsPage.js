@@ -16,11 +16,95 @@ import {
   TextField,
   Button,
   Chip,
+  Tooltip,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import CameraAltIcon from '@mui/icons-material/CameraAlt';
 import { studentPortalAPI } from '../../services/api';
 import { formatApiError } from '../../utils/apiError';
 import { useI18n } from '../../i18n/I18nContext';
+
+function CheckinButton({ row, onNavigate, t }) {
+  const hasEligibility =
+    row.phase_diem_danh !== undefined ||
+    row.co_the_quet !== undefined ||
+    row.da_diem_danh !== undefined;
+
+  if (!hasEligibility) {
+    return (
+      <Button
+        size="small"
+        variant="contained"
+        color="primary"
+        startIcon={<CameraAltIcon />}
+        onClick={() => onNavigate(row.ma_buoi)}
+        sx={{ fontWeight: 800, textTransform: 'none', borderRadius: 2 }}
+      >
+        {t('studentSessionsPage.checkinGeneric')}
+      </Button>
+    );
+  }
+
+  const disabled = Boolean(row.da_diem_danh) || row.phase_diem_danh === 'het_han';
+  const glow =
+    row.co_the_quet && row.khoang_dung_gio && !row.da_diem_danh
+      ? {
+          boxShadow: '0 0 22px rgba(37, 99, 235, 0.55)',
+          animation: 'sessGlow 2.2s ease-in-out infinite',
+          '@keyframes sessGlow': {
+            '0%, 100%': { boxShadow: '0 0 18px rgba(37, 99, 235, 0.45)' },
+            '50%': { boxShadow: '0 0 34px rgba(59, 130, 246, 0.9)' },
+          },
+        }
+      : {};
+
+  let label = t('studentSessionsPage.checkinPrepare');
+  let color = 'primary';
+  let variant = 'outlined';
+
+  if (row.da_diem_danh) {
+    label = t('studentSessionsPage.checkinDone');
+    color = 'success';
+    variant = 'outlined';
+  } else if (row.co_the_quet && row.khoang_dung_gio) {
+    label = t('studentSessionsPage.checkinOnTime');
+    color = 'primary';
+    variant = 'contained';
+  } else if (row.co_the_quet) {
+    label = t('studentSessionsPage.checkinLate');
+    color = 'warning';
+    variant = 'contained';
+  } else if (row.phase_diem_danh === 'chua_mo') {
+    label = t('studentSessionsPage.checkinPrepare');
+    variant = 'outlined';
+  } else if (row.phase_diem_danh === 'het_han') {
+    label = t('studentSessionsPage.checkinExpired');
+    variant = 'outlined';
+  }
+
+  return (
+    <Tooltip title={row.goi_y_diem_danh || ''} arrow placement="left">
+      <span>
+        <Button
+          size="small"
+          variant={variant}
+          color={disabled ? undefined : color}
+          disabled={disabled}
+          startIcon={<CameraAltIcon />}
+          onClick={() => onNavigate(row.ma_buoi)}
+          sx={{
+            fontWeight: 800,
+            textTransform: 'none',
+            borderRadius: 2,
+            ...glow,
+          }}
+        >
+          {label}
+        </Button>
+      </span>
+    </Tooltip>
+  );
+}
 
 export default function StudentSessionsPage({ compact = false, maxItems = null }) {
   const navigate = useNavigate();
@@ -52,6 +136,10 @@ export default function StudentSessionsPage({ compact = false, maxItems = null }
     : rows;
   const displayRows = maxItems ? filtered.slice(0, maxItems) : filtered;
 
+  const goAttendance = (maBuoi) => {
+    navigate(`/student/attendance?ma_buoi=${encodeURIComponent(maBuoi)}`);
+  };
+
   return (
     <Box>
       {!compact && (
@@ -63,7 +151,11 @@ export default function StudentSessionsPage({ compact = false, maxItems = null }
             variant="h4"
             fontWeight={900}
             gutterBottom
-            sx={{ background: 'linear-gradient(90deg,#4f46e5,#db2777)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}
+            sx={{
+              background: 'linear-gradient(90deg,#4f46e5,#db2777)',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+            }}
           >
             {t('studentSessionsPage.title')}
           </Typography>
@@ -84,19 +176,30 @@ export default function StudentSessionsPage({ compact = false, maxItems = null }
             onChange={(e) => setFilterDate(e.target.value)}
             sx={{ minWidth: 200 }}
           />
-          <Button variant="outlined" onClick={() => setFilterDate('')}>{t('studentSessionsPage.viewAll')}</Button>
-          <Button variant="contained" onClick={load}>{t('studentSessionsPage.refresh')}</Button>
+          <Button variant="outlined" onClick={() => setFilterDate('')}>
+            {t('studentSessionsPage.viewAll')}
+          </Button>
+          <Button variant="contained" onClick={load}>
+            {t('studentSessionsPage.refresh')}
+          </Button>
         </Box>
       </Card>
 
-      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+      {error && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {error}
+        </Alert>
+      )}
 
       {loading ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
           <CircularProgress />
         </Box>
       ) : (
-        <TableContainer component={Paper} sx={{ borderRadius: 3, overflow: 'hidden', boxShadow: '0 4px 24px rgba(0,0,0,0.08)' }}>
+        <TableContainer
+          component={Paper}
+          sx={{ borderRadius: 3, overflow: 'hidden', boxShadow: '0 4px 24px rgba(0,0,0,0.08)' }}
+        >
           <Table size="small">
             <TableHead>
               <TableRow sx={{ bgcolor: 'primary.main', '& th': { color: '#fff', fontWeight: 800 } }}>
@@ -106,6 +209,7 @@ export default function StudentSessionsPage({ compact = false, maxItems = null }
                 <TableCell>{t('studentSessionsPage.table.lhpCode')}</TableCell>
                 <TableCell>{t('studentSessionsPage.table.teacher')}</TableCell>
                 <TableCell>{t('studentSessionsPage.table.sessionCode')}</TableCell>
+                <TableCell align="right">{t('studentSessionsPage.table.checkin')}</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -121,11 +225,14 @@ export default function StudentSessionsPage({ compact = false, maxItems = null }
                   </TableCell>
                   <TableCell>{r.giang_vien}</TableCell>
                   <TableCell>{r.ma_buoi}</TableCell>
+                  <TableCell align="right">
+                    <CheckinButton row={r} onNavigate={goAttendance} t={t} />
+                  </TableCell>
                 </TableRow>
               ))}
               {!displayRows.length && (
                 <TableRow>
-                  <TableCell colSpan={6} align="center">
+                  <TableCell colSpan={7} align="center">
                     <Typography color="text.secondary" sx={{ py: 3 }}>
                       {t('studentSessionsPage.empty')}
                     </Typography>

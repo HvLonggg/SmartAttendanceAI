@@ -1,5 +1,19 @@
 import React, { useEffect, useState } from 'react';
-import { Box, Card, CardContent, Typography, Table, TableHead, TableRow, TableCell, TableBody, Chip, Button, Alert } from '@mui/material';
+import {
+  Box,
+  Card,
+  CardContent,
+  Typography,
+  Table,
+  TableHead,
+  TableRow,
+  TableCell,
+  TableBody,
+  Chip,
+  Button,
+  Alert,
+  Tooltip,
+} from '@mui/material';
 import { authAPI } from '../services/api';
 import { formatApiError } from '../utils/apiError';
 import { useAuth } from '../auth/AuthContext';
@@ -31,8 +45,14 @@ export default function AdminUserManagement() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const isSelfRow = (r) =>
+    String(r?.username || '')
+      .trim()
+      .toLowerCase() === String(user?.username || '').trim().toLowerCase();
+
   const toggleLock = async (u) => {
     if (!u || busyUser) return;
+    if (isSelfRow(u) && !u.is_locked) return;
     setBusyUser(u.username);
     setError(null);
     try {
@@ -105,19 +125,29 @@ export default function AdminUserManagement() {
                       />
                     </TableCell>
                     <TableCell>
-                      <Button
-                        size="small"
-                        variant={r.is_locked ? 'outlined' : 'contained'}
-                        color={r.is_locked ? 'success' : 'error'}
-                        disabled={busyUser === r.username}
-                        onClick={() => toggleLock(r)}
+                      <Tooltip
+                        title={isSelfRow(r) && !r.is_locked ? t('adminUserManagement.cannotSelfLock') : ''}
+                        disableHoverListener={!(isSelfRow(r) && !r.is_locked)}
+                        arrow
                       >
-                        {busyUser === r.username
-                          ? t('adminUserManagement.actionProcessing')
-                          : r.is_locked
-                            ? t('adminUserManagement.unlock')
-                            : t('adminUserManagement.lock')}
-                      </Button>
+                        <span>
+                          <Button
+                            size="small"
+                            variant={r.is_locked ? 'outlined' : 'contained'}
+                            color={r.is_locked ? 'success' : 'error'}
+                            disabled={
+                              busyUser === r.username || (isSelfRow(r) && !r.is_locked)
+                            }
+                            onClick={() => toggleLock(r)}
+                          >
+                            {busyUser === r.username
+                              ? t('adminUserManagement.actionProcessing')
+                              : r.is_locked
+                                ? t('adminUserManagement.unlock')
+                                : t('adminUserManagement.lock')}
+                          </Button>
+                        </span>
+                      </Tooltip>
                     </TableCell>
                   </TableRow>
                 ))}
