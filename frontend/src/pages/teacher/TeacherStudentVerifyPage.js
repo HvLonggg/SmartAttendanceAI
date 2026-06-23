@@ -21,9 +21,10 @@ import FaceRetouchingNaturalIcon from '@mui/icons-material/FaceRetouchingNatural
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import MasksIcon from '@mui/icons-material/Masks';
 import BackHandIcon from '@mui/icons-material/BackHand';
+import GroupsIcon from '@mui/icons-material/Groups';
 import { recognitionAPI } from '../../services/api';
 import { getStudentAvatarSrc, getStudentInitialLetter } from '../../utils/studentAvatar';
-import { buildRecognitionBlockNotice, getRecognitionBlockFeedback } from '../../utils/recognitionFeedback';
+import { buildRecognitionBlockNotice } from '../../utils/recognitionFeedback';
 import CameraNoticeOverlay from '../../components/CameraNoticeOverlay';
 import { useI18n } from '../../i18n/I18nContext';
 
@@ -33,10 +34,14 @@ const videoConstraints = {
   facingMode: 'user',
 };
 
+/** Chu kỳ quét tự động — cân bằng tốc độ và ổn định (đồng bộ với điểm danh sinh viên). */
+const AUTO_SCAN_MS = 1000;
+
 function noticeIconForKind(kind) {
   if (kind === 'mask') return <MasksIcon sx={{ fontSize: 36, color: '#fff' }} />;
   if (kind === 'occluded') return <BackHandIcon sx={{ fontSize: 36, color: '#fff' }} />;
   if (kind === 'unknown_face') return <FaceRetouchingNaturalIcon sx={{ fontSize: 36, color: '#fff' }} />;
+  if (kind === 'multiple_faces') return <GroupsIcon sx={{ fontSize: 36, color: '#fff' }} />;
   return <ErrorOutlineIcon sx={{ fontSize: 36, color: '#fff' }} />;
 }
 
@@ -49,19 +54,8 @@ export default function TeacherStudentVerifyPage() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [avatarKey, setAvatarKey] = useState(0);
-  const [lockedIdentity, setLockedIdentity] = useState('');
   const [cameraNotice, setCameraNotice] = useState(null);
   const [blockAutoScan, setBlockAutoScan] = useState(false);
-
-  const isNoFaceMessage = (msg) => {
-    const x = String(msg || '').toLowerCase();
-    return (
-      x.includes('no face') ||
-      x.includes('không thấy') ||
-      x.includes('khuôn mặt') ||
-      x.includes('không trích')
-    );
-  };
 
   const dismissCameraNotice = () => {
     setCameraNotice(null);
@@ -76,16 +70,23 @@ export default function TeacherStudentVerifyPage() {
     setError(null);
   };
 
-  const runVerify = async ({ keepResult = false } = {}) => {
+  const runVerify = async ({ keepSuccess = false } = {}) => {
     if (inFlightRef.current || blockAutoScan || cameraNotice) return;
     inFlightRef.current = true;
     setRunning(true);
-    if (!autoIdentify) setError(null);
-    if (!keepResult) setResult(null);
+
+    if (!autoIdentify) {
+      setError(null);
+      setResult(null);
+      setCameraNotice(null);
+    } else if (!keepSuccess) {
+      setError(null);
+    }
+
     try {
       const imageSrc = webcamRef.current?.getScreenshot?.();
       if (!imageSrc) {
-        if (!lockedIdentity) {
+        if (!autoIdentify) {
           setError(t('teacherStudentVerifyPage.noScreenshot'));
         }
         return;
@@ -95,7 +96,6 @@ export default function TeacherStudentVerifyPage() {
       const file = new File([blob], 'teacher_verify.jpg', { type: 'image/jpeg' });
       const res = await recognitionAPI.recognizeFace(file);
       const data = res.data || {};
-      const identifiedMa = String(data?.student_info?.ma_sv || '').trim();
 
       const blockNotice = buildRecognitionBlockNotice(
         data,
@@ -103,59 +103,38 @@ export default function TeacherStudentVerifyPage() {
         t('teacherStudentVerifyPage.overlayDismiss')
       );
       if (blockNotice) {
-        if (!lockedIdentity) {
-          showBlockingNotice({
-            ...blockNotice,
-            icon: noticeIconForKind(blockNotice.kind),
-          });
-        }
-        return;
-      }
-
-      if (data.success && identifiedMa) {
-        if (identifiedMa !== lockedIdentity) {
-          setResult(data);
-          setAvatarKey((k) => k + 1);
-          setLockedIdentity(identifiedMa);
-        }
-        setError(null);
-        return;
-      }
-
-      const msg = data.message || t('teacherStudentVerifyPage.notRecognized');
-      const noFace = isNoFaceMessage(msg);
-
-      if (lockedIdentity && noFace) {
-        setLockedIdentity('');
-        setResult(null);
         showBlockingNotice({
-          variant: 'info',
-          icon: <FaceRetouchingNaturalIcon sx={{ fontSize: 36, color: '#fff' }} />,
-          title: t('teacherStudentVerifyPage.overlayTitleNoFace'),
-          message: t('teacherStudentVerifyPage.noFaceAfterLock'),
-          actionLabel: t('teacherStudentVerifyPage.overlayDismiss'),
+          ...blockNotice,
+          icon: noticeIconForKind(blockNotice.kind),
         });
         return;
       }
 
-      if (!lockedIdentity) {
-        const blockFeedback = getRecognitionBlockFeedback(data, t);
-        if (blockFeedback) {
-          showBlockingNotice({
-            variant: 'warning',
-            icon: noticeIconForKind(blockFeedback.kind),
-            title: blockFeedback.title,
-            message: blockFeedback.message,
-            actionLabel: t('teacherStudentVerifyPage.overlayDismiss'),
-          });
-        } else {
-          setError(msg);
-        }
+      if (data.success && data?.student_info?.ma_sv) {
+        setResult(data);
+        setAvatarKey((k) => k + 1);
+        setError(null);
+        setCameraNotice(null);
+        setBlockAutoScan(false);
+        return;
       }
+
+      if (!keepSuccess) {
+        setResult(null);
+      }
+
+      const msg = data.message || t('teacherStudentVerifyPage.notRecognized');
+      setError(msg);
     } catch (e) {
-      if (!lockedIdentity) {
-        setError(e?.response?.data?.detail || e?.apiMessage || e?.message || t('teacherStudentVerifyPage.requestError'));
+      if (!keepSuccess) {
+        setResult(null);
       }
+      setError(
+        e?.response?.data?.detail ||
+          e?.apiMessage ||
+          e?.message ||
+          t('teacherStudentVerifyPage.requestError')
+      );
     } finally {
       setRunning(false);
       inFlightRef.current = false;
@@ -168,10 +147,14 @@ export default function TeacherStudentVerifyPage() {
     let timer = null;
 
     const tick = async () => {
+      if (!alive || inFlightRef.current) {
+        if (alive) timer = setTimeout(tick, AUTO_SCAN_MS);
+        return;
+      }
+      const hadSuccess = Boolean(result?.success);
+      await runVerify({ keepSuccess: hadSuccess });
       if (!alive) return;
-      await runVerify({ keepResult: true });
-      if (!alive) return;
-      timer = setTimeout(tick, 420);
+      timer = setTimeout(tick, AUTO_SCAN_MS);
     };
     tick();
 
@@ -180,7 +163,7 @@ export default function TeacherStudentVerifyPage() {
       if (timer) clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoIdentify, lockedIdentity, blockAutoScan, cameraNotice]);
+  }, [autoIdentify, blockAutoScan, cameraNotice, result?.success]);
 
   const si = result?.student_info;
   const avatarSrc = si ? getStudentAvatarSrc(si, avatarKey) : null;
@@ -278,7 +261,10 @@ export default function TeacherStudentVerifyPage() {
                         const next = e.target.checked;
                         setAutoIdentify(next);
                         if (!next) {
-                          setLockedIdentity('');
+                          setResult(null);
+                          setError(null);
+                          setCameraNotice(null);
+                          setBlockAutoScan(false);
                         }
                       }}
                       disabled={(running && !autoIdentify) || Boolean(cameraNotice)}

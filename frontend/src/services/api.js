@@ -116,6 +116,22 @@ export const studentAPI = {
   deleteAvatar: (maSV) => apiClient.delete(`/students/${maSV}/avatar`),
 };
 
+// ==================== TEACHERS (ADMIN) ====================
+
+export const teacherAPI = {
+  getAll: () => apiClient.get('/teachers'),
+  getById: (maGV) => apiClient.get(`/teachers/${maGV}`),
+  create: (data) => apiClient.post('/teachers', data),
+  update: (maGV, data) => apiClient.put(`/teachers/${maGV}`, data),
+  delete: (maGV) => apiClient.delete(`/teachers/${maGV}`),
+};
+
+// ==================== ADMIN FEEDBACK ====================
+
+export const adminFeedbackAPI = {
+  listAll: () => apiClient.get('/admin/feedbacks'),
+};
+
 // ==================== CỔNG SINH VIÊN ====================
 export const studentPortalAPI = {
   getMyEnrollments: () => apiClient.get('/student/me/enrollments'),
@@ -238,9 +254,10 @@ export const attendanceAPI = {
 
 // ==================== TEACHER ====================
 
-export const teacherAPI = {
+export const teacherAttendanceAPI = {
   getMyClasses: () => apiClient.get('/teacher/my-classes'),
   getSessions: () => apiClient.get('/teacher/sessions'),
+  getTodaySessions: () => apiClient.get('/teacher/sessions'),
   createSession: (payload) => apiClient.post('/teacher/sessions', payload),
   updateSession: (maBuoi, payload) => apiClient.patch(`/teacher/sessions/${maBuoi}`, payload),
   deleteSession: (maBuoi) => apiClient.delete(`/teacher/sessions/${maBuoi}`),

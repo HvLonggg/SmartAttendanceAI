@@ -31,7 +31,7 @@ import {
   CheckCircle as CheckIcon,
   Schedule as ScheduleIcon,
 } from '@mui/icons-material';
-import { attendanceAPI } from '../services/api';
+import { attendanceAPI, teacherAttendanceAPI } from '../services/api';
 import { useI18n } from '../i18n/I18nContext';
 
 function TabPanel({ children, value, index, ...other }) {
@@ -65,7 +65,7 @@ function SessionManagement() {
   const fetchTodaySessions = async () => {
   try {
     setLoading(true);
-    const response = await attendanceAPI.getTodaySessions();
+    const response = await attendanceAPI.getTodaySessions(); // -> GET /sessions/today
     setSessions(response.data);
     setError(null);
   } catch (err) {

@@ -30,7 +30,7 @@ import {
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import { attendanceAPI, teacherAPI } from '../../services/api';
+import { attendanceAPI, teacherAttendanceAPI } from '../../services/api';
 import { formatApiError } from '../../utils/apiError';
 import { getStudentAvatarSrc } from '../../utils/studentAvatar';
 import { useI18n } from '../../i18n/I18nContext';
@@ -55,7 +55,7 @@ export default function TeacherSessionManagePage() {
     setLoading(true);
     setError(null);
     try {
-      const { data } = await teacherAPI.getSessions();
+      const { data } = await teacherAttendanceAPI.getSessions();
       setSessions(data || []);
     } catch (e) {
       setError(formatApiError(e.response?.data?.detail, t('teacherSessionManagePage.loadFail')));
@@ -88,7 +88,7 @@ export default function TeacherSessionManagePage() {
     setSessionLoadingMap((prev) => ({ ...prev, [key]: true }));
     setError(null);
     try {
-      const { data } = await teacherAPI.getSessionAttendanceList(session.ma_buoi);
+      const { data } = await teacherAttendanceAPI.getSessionAttendanceList(session.ma_buoi);
       const rows = (data?.students || []).map((s) => ({
         ...s,
         trang_thai_manual: s.trang_thai || 'Vắng',
@@ -141,7 +141,7 @@ export default function TeacherSessionManagePage() {
         trang_thai: r.trang_thai_manual || 'Vắng',
         ly_do: (r.ly_do_manual || '').trim() || null,
       }));
-      await teacherAPI.saveManualAttendance(session.ma_buoi, items);
+      await teacherAttendanceAPI.saveManualAttendance(session.ma_buoi, items);
       setOk(t('teacherSessionsPage.manualSaveOk'));
       setSessionRowsMap((prev) => ({ ...prev, [key]: null }));
       await loadSessionStudents(session);

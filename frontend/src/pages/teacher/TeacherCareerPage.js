@@ -23,7 +23,7 @@ import SchoolIcon from '@mui/icons-material/School';
 import EventAvailableIcon from '@mui/icons-material/EventAvailable';
 import { format, parseISO } from 'date-fns';
 import { vi, enUS } from 'date-fns/locale';
-import { teacherAPI } from '../../services/api';
+import { teacherAttendanceAPI } from '../../services/api';
 import { formatApiError } from '../../utils/apiError';
 import { useI18n } from '../../i18n/I18nContext';
 
@@ -64,7 +64,7 @@ export default function TeacherCareerPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await teacherAPI.getCareerHistory();
+      const res = await teacherAttendanceAPI.getCareerHistory();
       setData(res.data);
     } catch (e) {
       setError(formatApiError(e.response?.data?.detail, t('teacherCareer.loadError')));

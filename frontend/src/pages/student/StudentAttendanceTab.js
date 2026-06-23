@@ -38,6 +38,7 @@ import FaceIcon from '@mui/icons-material/Face';
 import TouchAppIcon from '@mui/icons-material/TouchApp';
 import MasksIcon from '@mui/icons-material/Masks';
 import BackHandIcon from '@mui/icons-material/BackHand';
+import GroupsIcon from '@mui/icons-material/Groups';
 import { studentPortalAPI, attendanceAPI, recognitionAPI } from '../../services/api';
 import { captureSequentialWebcamFrames, buildRecognizeLiveFormData } from '../../utils/liveWebcamCapture';
 import { FACE_ID_LIVE_CAPTURE } from '../../config/faceIdLiveCapture';
@@ -62,6 +63,7 @@ function noticeIconForKind(kind) {
   if (kind === 'mask') return <MasksIcon sx={{ fontSize: 36, color: '#fff' }} />;
   if (kind === 'occluded') return <BackHandIcon sx={{ fontSize: 36, color: '#fff' }} />;
   if (kind === 'unknown_face') return <FaceIcon sx={{ fontSize: 36, color: '#fff' }} />;
+  if (kind === 'multiple_faces') return <GroupsIcon sx={{ fontSize: 36, color: '#fff' }} />;
   return <ErrorOutlineIcon sx={{ fontSize: 36, color: '#fff' }} />;
 }
 

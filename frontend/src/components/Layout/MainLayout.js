@@ -45,10 +45,12 @@ const drawerWidth = 260;
 const adminMenuSpec = [
   { tKey: 'nav.dashboard', Icon: DashboardIcon, path: '/dashboard' },
   { tKey: 'nav.studentList', Icon: PeopleIcon, path: '/students' },
+  { tKey: 'nav.teacherList', Icon: AssignmentIndIcon, path: '/teachers' },
   { tKey: 'nav.sessionMgmt', Icon: CalendarIcon, path: '/sessions' },
   { tKey: 'nav.adminClassCreate', Icon: CalendarIcon, path: '/admin/classes' },
   { tKey: 'nav.adminTeaching', Icon: AssignmentIndIcon, path: '/admin/teaching' },
   { tKey: 'nav.analytics', Icon: AssessmentIcon, path: '/analytics' },
+  { tKey: 'nav.adminFeedback', Icon: RateReviewIcon, path: '/admin/feedbacks' },
 ];
 
 const teacherMenuSpec = [

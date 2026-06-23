@@ -21,6 +21,10 @@ import {
   Paper,
   LinearProgress,
   TextField,
+  MenuItem,
+  FormControl,
+  InputLabel,
+  Select,
 } from '@mui/material';
 import {
   ArrowBack as ArrowBackIcon,
@@ -32,6 +36,7 @@ import {
   Schedule as ScheduleIcon,
   PhotoCamera as PhotoCameraIcon,
   DeleteOutline as DeleteOutlineIcon,
+  Edit as EditIcon,
 } from '@mui/icons-material';
 import {
   LineChart,
@@ -73,6 +78,19 @@ function StudentDetail() {
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileMsg, setProfileMsg] = useState(null);
   const [profileErr, setProfileErr] = useState(null);
+  const [adminForm, setAdminForm] = useState({
+    ma_sv: '',
+    ho_ten: '',
+    ngay_sinh: '',
+    gioi_tinh: 'Nam',
+    lop: '',
+    khoa: '',
+    email: '',
+    trang_thai: 'Đang học',
+  });
+  const [adminSaving, setAdminSaving] = useState(false);
+  const [adminMsg, setAdminMsg] = useState(null);
+  const [adminErr, setAdminErr] = useState(null);
 
   useEffect(() => {
     fetchStudentData();
@@ -82,6 +100,20 @@ function StudentDetail() {
     if (student) {
       setProfileHoTen(student.ho_ten || '');
       setProfileEmail(student.email || '');
+      const birth =
+        student.ngay_sinh != null
+          ? String(student.ngay_sinh).slice(0, 10)
+          : '';
+      setAdminForm({
+        ma_sv: student.ma_sv || '',
+        ho_ten: student.ho_ten || '',
+        ngay_sinh: birth,
+        gioi_tinh: student.gioi_tinh || 'Nam',
+        lop: student.lop || '',
+        khoa: student.khoa || '',
+        email: student.email || '',
+        trang_thai: student.trang_thai || 'Đang học',
+      });
     }
   }, [student]);
 
@@ -157,6 +189,8 @@ function StudentDetail() {
   const canEditStudentProfile =
     user?.role === 'STUDENT' && String(user?.ma_sv) === String(student?.ma_sv);
 
+  const canEditAdminProfile = user?.role === 'ADMIN';
+
   const handleSaveStudentProfile = async () => {
     setProfileErr(null);
     setProfileMsg(null);
@@ -172,6 +206,48 @@ function StudentDetail() {
       setProfileErr(formatApiError(err.response?.data?.detail, t('studentDetailPage.saveFail')));
     } finally {
       setProfileSaving(false);
+    }
+  };
+
+  const handleSaveAdminProfile = async () => {
+    setAdminErr(null);
+    setAdminMsg(null);
+    setAdminSaving(true);
+    try {
+      const res = await studentAPI.update(student.ma_sv, {
+        ma_sv: adminForm.ma_sv,
+        ho_ten: adminForm.ho_ten,
+        ngay_sinh: adminForm.ngay_sinh || null,
+        gioi_tinh: adminForm.gioi_tinh,
+        lop: adminForm.lop,
+        khoa: adminForm.khoa,
+        email: adminForm.email,
+        trang_thai: adminForm.trang_thai,
+      });
+      setAdminMsg(t('studentDetailPage.adminUpdateMsg'));
+      const newMa = res.data?.ma_sv || adminForm.ma_sv;
+      if (String(newMa) !== String(maSV)) {
+        navigate(`/students/${newMa}`, { replace: true });
+      } else {
+        await fetchStudentData();
+      }
+    } catch (err) {
+      setAdminErr(formatApiError(err.response?.data?.detail, t('studentDetailPage.saveFail')));
+    } finally {
+      setAdminSaving(false);
+    }
+  };
+
+  const handleDeleteStudent = async () => {
+    if (!window.confirm(t('studentDetailPage.deleteConfirm'))) return;
+    setAdminErr(null);
+    setAdminSaving(true);
+    try {
+      await studentAPI.delete(student.ma_sv);
+      navigate('/students');
+    } catch (err) {
+      setAdminErr(formatApiError(err.response?.data?.detail, t('studentDetailPage.deleteFail')));
+      setAdminSaving(false);
     }
   };
 
@@ -500,6 +576,108 @@ function StudentDetail() {
                     />
                     <Button variant="contained" onClick={handleSaveStudentProfile} disabled={profileSaving} fullWidth>
                       {profileSaving ? t('studentDetailPage.saving') : t('studentDetailPage.saveChanges')}
+                    </Button>
+                  </>
+                )}
+
+                {canEditAdminProfile && (
+                  <>
+                    <Divider sx={{ my: 2 }} />
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
+                      <EditIcon color="primary" fontSize="small" />
+                      <Typography variant="subtitle2" fontWeight={800} sx={{ color: 'primary.main' }}>
+                        {t('studentDetailPage.adminEditTitle')}
+                      </Typography>
+                    </Box>
+                    {adminErr && (
+                      <Alert severity="error" sx={{ mb: 1 }}>
+                        {adminErr}
+                      </Alert>
+                    )}
+                    {adminMsg && (
+                      <Alert severity="success" sx={{ mb: 1 }}>
+                        {adminMsg}
+                      </Alert>
+                    )}
+                    <TextField
+                      label={t('studentDetailPage.fieldStudentId')}
+                      fullWidth
+                      value={adminForm.ma_sv}
+                      onChange={(e) => setAdminForm((f) => ({ ...f, ma_sv: e.target.value }))}
+                      sx={{ mb: 1.5 }}
+                      size="small"
+                    />
+                    <TextField
+                      label={t('studentDetailPage.fullNameLabel')}
+                      fullWidth
+                      value={adminForm.ho_ten}
+                      onChange={(e) => setAdminForm((f) => ({ ...f, ho_ten: e.target.value }))}
+                      sx={{ mb: 1.5 }}
+                      size="small"
+                    />
+                    <TextField
+                      label={t('studentDetailPage.fieldBirthDate')}
+                      fullWidth
+                      type="date"
+                      value={adminForm.ngay_sinh}
+                      onChange={(e) => setAdminForm((f) => ({ ...f, ngay_sinh: e.target.value }))}
+                      InputLabelProps={{ shrink: true }}
+                      sx={{ mb: 1.5 }}
+                      size="small"
+                    />
+                    <FormControl fullWidth size="small" sx={{ mb: 1.5 }}>
+                      <InputLabel>{t('studentDetailPage.fieldGender')}</InputLabel>
+                      <Select
+                        label={t('studentDetailPage.fieldGender')}
+                        value={adminForm.gioi_tinh}
+                        onChange={(e) => setAdminForm((f) => ({ ...f, gioi_tinh: e.target.value }))}
+                      >
+                        <MenuItem value="Nam">{t('studentDetailPage.genderMale')}</MenuItem>
+                        <MenuItem value="Nữ">{t('studentDetailPage.genderFemale')}</MenuItem>
+                      </Select>
+                    </FormControl>
+                    <TextField
+                      label={t('studentDetailPage.fieldClass')}
+                      fullWidth
+                      value={adminForm.lop}
+                      onChange={(e) => setAdminForm((f) => ({ ...f, lop: e.target.value }))}
+                      sx={{ mb: 1.5 }}
+                      size="small"
+                    />
+                    <TextField
+                      label={t('studentDetailPage.fieldFaculty')}
+                      fullWidth
+                      value={adminForm.khoa}
+                      onChange={(e) => setAdminForm((f) => ({ ...f, khoa: e.target.value }))}
+                      sx={{ mb: 1.5 }}
+                      size="small"
+                    />
+                    <TextField
+                      label={t('studentDetailPage.emailLabel')}
+                      fullWidth
+                      type="email"
+                      value={adminForm.email}
+                      onChange={(e) => setAdminForm((f) => ({ ...f, email: e.target.value }))}
+                      sx={{ mb: 1.5 }}
+                      size="small"
+                    />
+                    <FormControl fullWidth size="small" sx={{ mb: 1.5 }}>
+                      <InputLabel>{t('studentDetailPage.fieldStatus')}</InputLabel>
+                      <Select
+                        label={t('studentDetailPage.fieldStatus')}
+                        value={adminForm.trang_thai}
+                        onChange={(e) => setAdminForm((f) => ({ ...f, trang_thai: e.target.value }))}
+                      >
+                        <MenuItem value="Đang học">{t('studentDetailPage.statusStudying')}</MenuItem>
+                        <MenuItem value="Tạm nghỉ">{t('studentDetailPage.statusPaused')}</MenuItem>
+                        <MenuItem value="Đã tốt nghiệp">{t('studentDetailPage.statusGraduated')}</MenuItem>
+                      </Select>
+                    </FormControl>
+                    <Button variant="contained" onClick={handleSaveAdminProfile} disabled={adminSaving} fullWidth sx={{ mb: 1 }}>
+                      {adminSaving ? t('studentDetailPage.saving') : t('studentDetailPage.saveChanges')}
+                    </Button>
+                    <Button variant="outlined" color="error" onClick={handleDeleteStudent} disabled={adminSaving} fullWidth>
+                      {t('studentDetailPage.deleteStudent')}
                     </Button>
                   </>
                 )}

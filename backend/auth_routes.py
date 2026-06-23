@@ -210,6 +210,7 @@ def ensure_auth_tables() -> None:
     cursor.execute("IF COL_LENGTH('dbo.NguoiDung','MaSV') IS NULL ALTER TABLE dbo.NguoiDung ADD MaSV NVARCHAR(30) NULL")
     cursor.execute("IF COL_LENGTH('dbo.NguoiDung','MaGV') IS NULL ALTER TABLE dbo.NguoiDung ADD MaGV NVARCHAR(30) NULL")
     cursor.execute("IF COL_LENGTH('dbo.NguoiDung','MaKhoa') IS NULL ALTER TABLE dbo.NguoiDung ADD MaKhoa NVARCHAR(20) NULL")
+    cursor.execute("IF COL_LENGTH('dbo.NguoiDung','InitialPasswordPlain') IS NULL ALTER TABLE dbo.NguoiDung ADD InitialPasswordPlain NVARCHAR(128) NULL")
 
     cursor.execute("""
     IF OBJECT_ID('dbo.Khoa', 'U') IS NULL
@@ -953,10 +954,10 @@ async def register(req: RegisterRequest):
 
         cursor.execute(
             """
-            INSERT INTO dbo.NguoiDung (Username, HoTen, MaSV, MaGV, MaKhoa, Role, Email, Phone, PasswordHash, PasswordSalt, IsVerified, IsLocked, LockReason, Avatar, UpdatedAt)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, NULL, NULL, SYSUTCDATETIME())
+            INSERT INTO dbo.NguoiDung (Username, HoTen, MaSV, MaGV, MaKhoa, Role, Email, Phone, PasswordHash, PasswordSalt, InitialPasswordPlain, IsVerified, IsLocked, LockReason, Avatar, UpdatedAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, NULL, NULL, SYSUTCDATETIME())
             """,
-            (username, ho_ten, ma_sv, ma_gv, ma_khoa_user, role, final_email, req.phone, pwd_hash, salt),
+            (username, ho_ten, ma_sv, ma_gv, ma_khoa_user, role, final_email, req.phone, pwd_hash, salt, password_plain),
         )
         conn.commit()
 
@@ -1134,7 +1135,7 @@ async def change_password(req: ChangePasswordRequest, current=Depends(get_curren
         cursor.execute(
             """
             UPDATE dbo.NguoiDung
-            SET PasswordSalt = ?, PasswordHash = ?, UpdatedAt = SYSUTCDATETIME()
+            SET PasswordSalt = ?, PasswordHash = ?, InitialPasswordPlain = NULL, UpdatedAt = SYSUTCDATETIME()
             WHERE Id = ?
             """,
             (new_salt, new_hash, user_id),
@@ -1231,7 +1232,7 @@ async def reset_password(req: ResetPasswordRequest):
         cursor.execute(
             """
             UPDATE dbo.NguoiDung
-            SET PasswordSalt = ?, PasswordHash = ?, UpdatedAt = SYSUTCDATETIME()
+            SET PasswordSalt = ?, PasswordHash = ?, InitialPasswordPlain = NULL, UpdatedAt = SYSUTCDATETIME()
             WHERE Id = ?
             """,
             (new_salt, new_hash, user_id),
@@ -1290,7 +1291,7 @@ async def reset_password_email(req: ResetPasswordEmailRequest):
         cursor.execute(
             """
             UPDATE dbo.NguoiDung
-            SET PasswordSalt = ?, PasswordHash = ?, UpdatedAt = SYSUTCDATETIME()
+            SET PasswordSalt = ?, PasswordHash = ?, InitialPasswordPlain = NULL, UpdatedAt = SYSUTCDATETIME()
             WHERE Id = ?
             """,
             (new_salt, new_hash, user_id),
@@ -1596,7 +1597,8 @@ async def admin_list_users(current=Depends(require_role("ADMIN"))):
     try:
         cursor.execute(
             """
-            SELECT Username, Role, Email, Phone, IsVerified, IsLocked, LockReason, Avatar, CreatedAt
+            SELECT Username, Role, Email, Phone, IsVerified, IsLocked, LockReason, Avatar, CreatedAt,
+                   HoTen, MaSV, MaGV, InitialPasswordPlain
             FROM dbo.NguoiDung
             ORDER BY CreatedAt DESC
             """
@@ -1604,10 +1606,16 @@ async def admin_list_users(current=Depends(require_role("ADMIN"))):
         rows = cursor.fetchall()
         data = []
         for r in rows:
+            ho_ten = (r[9] or "").strip()
+            role = r[1]
+            initial_plain = (r[12] or "").strip() if r[12] else ""
+            password_display = initial_plain or None
+            if not password_display and role == "STUDENT" and ho_ten:
+                password_display = _build_student_password(ho_ten)
             data.append(
                 {
                     "username": r[0],
-                    "role": r[1],
+                    "role": role,
                     "email": r[2],
                     "phone": r[3],
                     "is_verified": bool(r[4]),
@@ -1615,6 +1623,11 @@ async def admin_list_users(current=Depends(require_role("ADMIN"))):
                     "lock_reason": r[6],
                     "avatar": r[7],
                     "created_at": r[8].isoformat() if r[8] else None,
+                    "ho_ten": ho_ten or None,
+                    "ma_sv": (r[10] or "").strip() or None,
+                    "ma_gv": (r[11] or "").strip() or None,
+                    "password_display": password_display,
+                    "password_known": bool(password_display),
                 }
             )
         return {"users": data}
@@ -1658,10 +1671,10 @@ async def admin_provision_student_accounts(current=Depends(require_role("ADMIN")
             cursor.execute(
                 """
                 INSERT INTO dbo.NguoiDung
-                  (Username, HoTen, MaSV, MaGV, MaKhoa, Role, Email, Phone, PasswordHash, PasswordSalt, IsVerified, IsLocked, LockReason, Avatar, UpdatedAt)
-                VALUES (?, ?, ?, NULL, NULL, N'STUDENT', ?, NULL, ?, ?, 1, 0, NULL, NULL, SYSUTCDATETIME())
+                  (Username, HoTen, MaSV, MaGV, MaKhoa, Role, Email, Phone, PasswordHash, PasswordSalt, InitialPasswordPlain, IsVerified, IsLocked, LockReason, Avatar, UpdatedAt)
+                VALUES (?, ?, ?, NULL, NULL, N'STUDENT', ?, NULL, ?, ?, ?, 1, 0, NULL, NULL, SYSUTCDATETIME())
                 """,
-                (username, ho_ten, ma_sv, email, pwd_hash, salt),
+                (username, ho_ten, ma_sv, email, pwd_hash, salt, plain_password),
             )
             created.append(
                 StudentCredentialItem(

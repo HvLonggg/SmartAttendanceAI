@@ -121,64 +121,17 @@ export default function AdminTeachingManagementPage() {
         <Grid item xs={12}>
           <Card>
             <CardContent>
-              <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} sx={{ mb: 2 }}>
-                <TextField
-                  select
-                  size="small"
-                  label={t('adminTeaching.filterTeacher')}
-                  value={selectedMaGV}
-                  onChange={(e) => setSelectedMaGV(e.target.value)}
-                  sx={{ minWidth: 240 }}
-                >
-                  <MenuItem value="">{t('adminTeaching.all')}</MenuItem>
-                  {teachers.map((g) => (
-                    <MenuItem key={g.ma_gv} value={g.ma_gv}>
-                      {g.ho_ten} ({g.ma_gv})
-                    </MenuItem>
-                  ))}
-                </TextField>
-                <TextField
-                  select
-                  size="small"
-                  label={t('adminTeaching.filterClass')}
-                  value={selectedMaLHP}
-                  onChange={(e) => setSelectedMaLHP(e.target.value)}
-                  sx={{ minWidth: 220 }}
-                >
-                  <MenuItem value="">{t('adminTeaching.all')}</MenuItem>
-                  {classes.map((c) => (
-                    <MenuItem key={c.ma_lhp} value={c.ma_lhp}>
-                      {c.ma_lhp}
-                    </MenuItem>
-                  ))}
-                </TextField>
-                <TextField
-                  label={t('adminTeaching.fromDate')}
-                  type="date"
-                  size="small"
-                  value={fromDate}
-                  onChange={(e) => setFromDate(e.target.value)}
-                  InputLabelProps={{ shrink: true }}
-                />
-                <TextField
-                  label={t('adminTeaching.toDate')}
-                  type="date"
-                  size="small"
-                  value={toDate}
-                  onChange={(e) => setToDate(e.target.value)}
-                  InputLabelProps={{ shrink: true }}
-                />
-                <Button variant="outlined" onClick={loadData} disabled={loading}>
-                  {t('adminTeaching.refresh')}
-                </Button>
-              </Stack>
-
               <Typography variant="h6" fontWeight="bold" gutterBottom color="text.primary">
                 {t('adminTeaching.assignmentTitle')}
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
                 {t('adminTeaching.unassignedHint')}
               </Typography>
+              <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1.5 }}>
+                <Button variant="outlined" onClick={loadData} disabled={loading}>
+                  {t('adminTeaching.refresh')}
+                </Button>
+              </Box>
               <TableContainer>
               <Table size="small">
                 <TableHead>
@@ -259,6 +212,54 @@ export default function AdminTeachingManagementPage() {
               <Typography variant="h6" fontWeight="bold" gutterBottom color="text.primary">
                 {t('adminTeaching.overviewTitle')}
               </Typography>
+              <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} sx={{ mb: 2 }}>
+                <TextField
+                  select
+                  size="small"
+                  label={t('adminTeaching.filterTeacher')}
+                  value={selectedMaGV}
+                  onChange={(e) => setSelectedMaGV(e.target.value)}
+                  sx={{ minWidth: 240 }}
+                >
+                  <MenuItem value="">{t('adminTeaching.all')}</MenuItem>
+                  {teachers.map((g) => (
+                    <MenuItem key={g.ma_gv} value={g.ma_gv}>
+                      {g.ho_ten} ({g.ma_gv})
+                    </MenuItem>
+                  ))}
+                </TextField>
+                <TextField
+                  select
+                  size="small"
+                  label={t('adminTeaching.filterClass')}
+                  value={selectedMaLHP}
+                  onChange={(e) => setSelectedMaLHP(e.target.value)}
+                  sx={{ minWidth: 220 }}
+                >
+                  <MenuItem value="">{t('adminTeaching.all')}</MenuItem>
+                  {[...new Set(overviewRows.map((r) => r.ma_lhp).filter(Boolean))].map((code) => (
+                    <MenuItem key={code} value={code}>
+                      {code}
+                    </MenuItem>
+                  ))}
+                </TextField>
+                <TextField
+                  label={t('adminTeaching.fromDate')}
+                  type="date"
+                  size="small"
+                  value={fromDate}
+                  onChange={(e) => setFromDate(e.target.value)}
+                  InputLabelProps={{ shrink: true }}
+                />
+                <TextField
+                  label={t('adminTeaching.toDate')}
+                  type="date"
+                  size="small"
+                  value={toDate}
+                  onChange={(e) => setToDate(e.target.value)}
+                  InputLabelProps={{ shrink: true }}
+                />
+              </Stack>
               <TableContainer>
               <Table size="small">
                 <TableHead>

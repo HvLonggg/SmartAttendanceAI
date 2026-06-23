@@ -26,7 +26,7 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditIcon from '@mui/icons-material/Edit';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import VisibilityIcon from '@mui/icons-material/Visibility';
-import { teacherAPI } from '../../services/api';
+import { teacherAttendanceAPI } from '../../services/api';
 import { formatApiError } from '../../utils/apiError';
 import { isSessionScanCodeValid } from '../../utils/sessionScanCode';
 import { useI18n } from '../../i18n/I18nContext';
@@ -55,7 +55,7 @@ export default function TeacherSessionsPage() {
     setLoading(true);
     setError(null);
     try {
-      const [c, s] = await Promise.all([teacherAPI.getMyClasses(), teacherAPI.getSessions()]);
+      const [c, s] = await Promise.all([teacherAttendanceAPI.getMyClasses(), teacherAttendanceAPI.getSessions()]);
       setClasses(c.data || []);
       setSessions(s.data || []);
       if (!maLhp && (c.data || []).length) setMaLhp(c.data[0].ma_lhp);
@@ -83,7 +83,7 @@ export default function TeacherSessionsPage() {
     try {
       const pd = parseInt(String(phutDung), 10);
       const pm = parseInt(String(phutMax), 10);
-      await teacherAPI.createSession({
+      await teacherAttendanceAPI.createSession({
         ma_lhp: maLhp,
         ngay_hoc: ngayHoc,
         gio_bat_dau: gioBatDau,
@@ -116,7 +116,7 @@ export default function TeacherSessionsPage() {
       }
     }
     try {
-      await teacherAPI.updateSession(editRow.ma_buoi, {
+      await teacherAttendanceAPI.updateSession(editRow.ma_buoi, {
         ngay_hoc: editRow.ngay_hoc,
         gio_bat_dau: editRow.gio_bat_dau?.slice?.(0, 5) || editRow.gio_bat_dau,
         ma_xac_thuc_buoi: editRow.ma_xac_thuc_buoi,
@@ -134,7 +134,7 @@ export default function TeacherSessionsPage() {
   const onDelete = async (row) => {
     if (!window.confirm(t('teacherSessionsPage.confirmDelete', { code: row.ma_buoi }))) return;
     try {
-      await teacherAPI.deleteSession(row.ma_buoi);
+      await teacherAttendanceAPI.deleteSession(row.ma_buoi);
       setOk(t('teacherSessionsPage.deleteOk'));
       await load();
     } catch (e) {

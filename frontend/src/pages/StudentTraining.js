@@ -2,45 +2,17 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Webcam from 'react-webcam';
 import {
-  Box,
-  Card,
-  CardContent,
-  Typography,
-  Button,
-  Grid,
-  Alert,
-  CircularProgress,
-  IconButton,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  LinearProgress,
-  Chip,
-  ImageList,
-  ImageListItem,
-  ImageListItemBar,
-  Stepper,
-  Step,
-  StepLabel,
-  Paper,
-  List,
-  ListItem,
-  ListItemIcon,
-  ListItemText,
+  Box, Card, CardContent, Typography, Button, Grid, Alert,
+  CircularProgress, IconButton, Dialog, DialogTitle, DialogContent,
+  DialogActions, LinearProgress, Chip, ImageList, ImageListItem,
+  ImageListItemBar, Stepper, Step, StepLabel, Paper, List,
+  ListItem, ListItemIcon, ListItemText,
 } from '@mui/material';
 import {
-  ArrowBack as BackIcon,
-  Camera as CameraIcon,
-  Upload as UploadIcon,
-  Delete as DeleteIcon,
-  School as TrainIcon,
-  CheckCircle as CheckIcon,
-  Warning as WarningIcon,
-  Refresh as RefreshIcon,
-  Close as CloseIcon,
-  Info as InfoIcon,
-  PhotoCamera as PhotoIcon,
+  ArrowBack as BackIcon, Camera as CameraIcon, Upload as UploadIcon,
+  Delete as DeleteIcon, School as TrainIcon, CheckCircle as CheckIcon,
+  Warning as WarningIcon, Refresh as RefreshIcon, Close as CloseIcon,
+  Info as InfoIcon, PhotoCamera as PhotoIcon,
   FaceRetouchingNatural as FaceIdIcon,
 } from '@mui/icons-material';
 import axios from 'axios';
@@ -51,23 +23,19 @@ import {
   MAX_TRAINING_IMAGES_PER_STUDENT,
   MIN_TRAINING_IMAGES_TO_RUN,
   RECOMMENDED_TRAINING_IMAGES,
-  AUTO_CAPTURE_INTERVAL_MS,
 } from '../config/trainingLimits';
 
 const API = getApiPathPrefix();
 
-const TRAINING_STEPS = [
-  'Chuẩn bị ảnh',
-  'Tải lên',
-  'Huấn luyện',
-  'Hoàn thành'
-];
+// Chụp siêu nhanh: 80ms / ảnh (~12 ảnh/giây)
+const FAST_CAPTURE_MS = 80;
 
+const TRAINING_STEPS = ['Chuẩn bị ảnh', 'Tải lên', 'Huấn luyện', 'Hoàn thành'];
 const CAPTURE_TIPS = [
   'Nhìn thẳng camera, mặt rõ, ánh sáng đủ',
   'Đổi góc nhẹ giữa các lần chụp (thẳng / nghiêng trái / phải)',
   'Giữ khoảng cách khoảng 50–100 cm từ camera',
-  `Tối thiểu ${MIN_TRAINING_IMAGES_TO_RUN} ảnh để huấn luyện; nhận diện tốt với khoảng ${RECOMMENDED_TRAINING_IMAGES} ảnh trở lên`,
+  `Tối thiểu ${MIN_TRAINING_IMAGES_TO_RUN} ảnh; nhận diện tốt với ${RECOMMENDED_TRAINING_IMAGES}+ ảnh`,
 ];
 
 function StudentTraining() {
@@ -76,62 +44,78 @@ function StudentTraining() {
   const { user } = useAuth();
   const webcamRef = useRef(null);
   const fileInputRef = useRef(null);
-  const inFlightUploadsRef = useRef(0);
-  const galleryRefreshTimerRef = useRef(null);
-  
-  // States
-  const [student, setStudent] = useState(null);
-  const [images, setImages] = useState([]);
-  const [trainingStatus, setTrainingStatus] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [capturing, setCapturing] = useState(false);
-  const [autoCapture, setAutoCapture] = useState(false);
-  const [showCamera, setShowCamera] = useState(false);
-  const [error, setError] = useState(null);
-  const [success, setSuccess] = useState(null);
-  const [selectedImage, setSelectedImage] = useState(null);
-  const [activeStep, setActiveStep] = useState(0);
-  const [trainingProgress, setTrainingProgress] = useState(0);
-  const [captureOkFlash, setCaptureOkFlash] = useState(false);
-  const [pendingUploads, setPendingUploads] = useState(0);
 
+  // ── Trạng thái chính ──────────────────────────────────────────────────────
+  const [student, setStudent]               = useState(null);
+  const [trainingStatus, setTrainingStatus] = useState(null);
+  const [loading, setLoading]               = useState(false);
+  const [autoCapture, setAutoCapture]       = useState(false);
+  const [showCamera, setShowCamera]         = useState(false);
+  const [error, setError]                   = useState(null);
+  const [success, setSuccess]               = useState(null);
+  const [selectedImage, setSelectedImage]   = useState(null);
+  const [activeStep, setActiveStep]         = useState(0);
+  const [trainingProgress, setTrainingProgress] = useState(0);
+  const [captureFlash, setCaptureFlash]     = useState(false);
+
+  // ── Nguồn dữ liệu ảnh DUY NHẤT ───────────────────────────────────────────
+  // Mỗi phần tử: { filename, size, url, isLocal, localId }
+  //   isLocal=true  → ảnh vừa chụp, data URL tạm, chưa confirmed từ server
+  //   isLocal=false → ảnh đã lưu trên server
+  const [images, setImages] = useState([]);
+
+  // ref để auto-capture đọc length mà không cần deps
+  const imagesLenRef = useRef(0);
+  useEffect(() => { imagesLenRef.current = images.length; }, [images]);
+
+  // ── Upload queue refs (khai báo đúng chỗ — scope component) ──────────────
+  const uploadQueueRef = useRef([]);   // [{ blobUrl, localId }]
+  const uploadBusyRef  = useRef(false);
+
+  // ── Auto-capture ref ──────────────────────────────────────────────────────
+  const autoCaptureRef = useRef(false);
+  autoCaptureRef.current = autoCapture;
+
+  // ── Fetch dữ liệu server ──────────────────────────────────────────────────
   const fetchStudent = useCallback(async () => {
     try {
-      const response = await axios.get(`${API}/students/${maSV}`);
-      setStudent(response.data);
-    } catch (err) {
+      const res = await axios.get(`${API}/students/${maSV}`);
+      setStudent(res.data);
+    } catch {
       setError('Không thể tải thông tin sinh viên');
-      console.error('Error fetching student:', err);
     }
-  }, [API, maSV]);
+  }, [maSV]);
 
-  /** Trả về số ảnh sau khi đồng bộ (để hiển thị đếm thực tế x/50). */
   const fetchTrainingImages = useCallback(async () => {
     try {
-      const response = await axios.get(`${API}/training/images/${maSV}`);
-      const list = response.data.images || [];
-      setImages(list);
-      if (list.length >= RECOMMENDED_TRAINING_IMAGES) {
-        setActiveStep(1);
-      }
+      const res  = await axios.get(`${API}/training/images/${maSV}`);
+      const list = (res.data.images || []).map(img => ({
+        filename : img.filename,
+        size     : img.size,
+        url      : `${API}/training/image/${maSV}/${img.filename}`,
+        isLocal  : false,
+        localId  : null,
+      }));
+      // Giữ lại các ảnh local đang pending upload (chưa confirmed)
+      setImages(prev => {
+        const serverFilenames = new Set(list.map(i => i.filename));
+        const stillPending    = prev.filter(img => img.isLocal && !serverFilenames.has(img.filename));
+        return [...list, ...stillPending];
+      });
+      if (list.length >= RECOMMENDED_TRAINING_IMAGES) setActiveStep(1);
       return list.length;
-    } catch (err) {
-      console.error('Error fetching images:', err);
+    } catch {
       return null;
     }
-  }, [API, maSV]);
+  }, [maSV]);
 
   const fetchTrainingStatus = useCallback(async () => {
     try {
-      const response = await axios.get(`${API}/training/status/${maSV}`);
-      setTrainingStatus(response.data);
-      if (response.data.in_database) {
-        setActiveStep(3);
-      }
-    } catch (err) {
-      console.error('Error fetching status:', err);
-    }
-  }, [API, maSV]);
+      const res = await axios.get(`${API}/training/status/${maSV}`);
+      setTrainingStatus(res.data);
+      if (res.data.in_database) setActiveStep(3);
+    } catch {}
+  }, [maSV]);
 
   useEffect(() => {
     fetchStudent();
@@ -139,262 +123,223 @@ function StudentTraining() {
     fetchTrainingStatus();
   }, [maSV, fetchStudent, fetchTrainingImages, fetchTrainingStatus]);
 
-  const scheduleGalleryRefresh = useCallback(() => {
-    if (galleryRefreshTimerRef.current) clearTimeout(galleryRefreshTimerRef.current);
-    galleryRefreshTimerRef.current = setTimeout(() => {
+  // ── Upload queue processor ────────────────────────────────────────────────
+  const processQueue = useCallback(async () => {
+    if (uploadBusyRef.current) return;
+    if (uploadQueueRef.current.length === 0) return;
+
+    uploadBusyRef.current = true;
+
+    while (uploadQueueRef.current.length > 0) {
+      const { blobUrl, localId } = uploadQueueRef.current.shift();
+
+      try {
+        // Chuyển data URL → Blob → FormData
+        const fetchRes = await fetch(blobUrl);
+        const blob     = await fetchRes.blob();
+        const fd       = new FormData();
+        fd.append('file', blob, `capture_${localId}.jpg`);
+
+        const response = await axios.post(
+          `${API}/training/upload-image/${maSV}`, fd
+        );
+
+        const confirmedFilename = response.data?.filename;
+
+        // Thay thế local entry bằng confirmed entry từ server
+        setImages(prev => prev.map(img =>
+          img.localId === localId
+            ? {
+                ...img,
+                isLocal  : false,
+                filename : confirmedFilename ?? img.filename,
+                url      : confirmedFilename
+                  ? `${API}/training/image/${maSV}/${confirmedFilename}`
+                  : img.url,
+              }
+            : img
+        ));
+      } catch {
+        // Upload thất bại → xóa ảnh local khỏi gallery
+        setImages(prev => prev.filter(img => img.localId !== localId));
+      }
+    }
+
+    uploadBusyRef.current = false;
+  }, [maSV]);
+
+  // ── Chụp 1 ảnh ────────────────────────────────────────────────────────────
+  const captureOne = useCallback(() => {
+    if (!webcamRef.current) return;
+    if (imagesLenRef.current >= MAX_TRAINING_IMAGES_PER_STUDENT) {
+      setAutoCapture(false);
+      return;
+    }
+
+    const imageSrc = webcamRef.current.getScreenshot();
+    if (!imageSrc) return;
+
+    const localId = Date.now() + Math.random();
+
+    // 1. Thêm vào gallery NGAY LẬP TỨC (hiện lên trên đầu)
+    const newEntry = {
+      filename : `capture_${localId}.jpg`,
+      size     : 0,
+      url      : imageSrc,   // data URL → hiện ngay, không cần server
+      isLocal  : true,
+      localId,
+    };
+    setImages(prev => [newEntry, ...prev]);
+
+    // Flash nhẹ
+    setCaptureFlash(true);
+    setTimeout(() => setCaptureFlash(false), 80);
+
+    // 2. Đẩy vào queue upload bất đồng bộ
+    uploadQueueRef.current.push({ blobUrl: imageSrc, localId });
+    processQueue();
+  }, [processQueue]);
+
+  // ── Auto-capture interval ─────────────────────────────────────────────────
+  useEffect(() => {
+    if (!autoCapture || !showCamera) return;
+    const id = setInterval(() => {
+      if (!autoCaptureRef.current) { clearInterval(id); return; }
+      captureOne();
+    }, FAST_CAPTURE_MS);
+    return () => clearInterval(id);
+    // captureOne intentionally excluded: stable enough via refs
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoCapture, showCamera]);
+
+  // ── Dừng auto-capture → fetch server để đồng bộ ──────────────────────────
+  const stopAutoCapture = useCallback(() => {
+    setAutoCapture(false);
+    // Sau khi queue upload xong (~1.2s), fetch lại để đồng bộ server
+    setTimeout(() => {
       fetchTrainingImages();
       fetchTrainingStatus();
-      galleryRefreshTimerRef.current = null;
-    }, 450);
+    }, 1200);
   }, [fetchTrainingImages, fetchTrainingStatus]);
 
-  const uploadCaptureBlob = useCallback(
-    async (blob, { fromAuto = false } = {}) => {
-      const file = new File([blob], `capture_${Date.now()}.jpg`, { type: 'image/jpeg' });
-      const formData = new FormData();
-      formData.append('file', file);
-      await axios.post(`${API}/training/upload-image/${maSV}`, formData);
-      if (!fromAuto) {
-        setCaptureOkFlash(true);
-        setTimeout(() => setCaptureOkFlash(false), 220);
-      }
-      scheduleGalleryRefresh();
-    },
-    [API, maSV, scheduleGalleryRefresh],
-  );
-
-  const handleCapture = useCallback(
-    (fromAuto = false) => {
-      if (!webcamRef.current) return;
-      if (!fromAuto && capturing) return;
-
-      const projectedTotal = images.length + inFlightUploadsRef.current;
-      if (projectedTotal >= MAX_TRAINING_IMAGES_PER_STUDENT) {
-        if (!fromAuto) {
-          setError(`Thư viện đã đạt giới hạn ${MAX_TRAINING_IMAGES_PER_STUDENT} ảnh.`);
-        }
-        setAutoCapture(false);
-        return;
-      }
-
-      const imageSrc = webcamRef.current.getScreenshot();
-      if (!imageSrc) {
-        if (!fromAuto) setError('Không thể chụp ảnh. Vui lòng kiểm tra camera.');
-        return;
-      }
-
-      if (!fromAuto) setCapturing(true);
-      inFlightUploadsRef.current += 1;
-      setPendingUploads(inFlightUploadsRef.current);
-
-      if (fromAuto) {
-        setCaptureOkFlash(true);
-        setTimeout(() => setCaptureOkFlash(false), 100);
-      }
-
-      fetch(imageSrc)
-        .then((r) => r.blob())
-        .then((blob) => uploadCaptureBlob(blob, { fromAuto }))
-        .then(() => {
-          if (!fromAuto) {
-            setSuccess(
-              `Đã lưu ảnh huấn luyện (${Math.min(projectedTotal + 1, MAX_TRAINING_IMAGES_PER_STUDENT)}/${RECOMMENDED_TRAINING_IMAGES}+ khuyến nghị)`,
-            );
-            setTimeout(() => setSuccess(null), 900);
-          }
-        })
-        .catch((err) => {
-          if (!fromAuto) {
-            setError('Lỗi khi lưu ảnh: ' + formatApiError(err.response?.data?.detail, err.message));
-          }
-          console.error('Capture error:', err);
-        })
-        .finally(() => {
-          inFlightUploadsRef.current = Math.max(0, inFlightUploadsRef.current - 1);
-          setPendingUploads(inFlightUploadsRef.current);
-          if (!fromAuto) setCapturing(false);
-        });
-    },
-    [capturing, images.length, uploadCaptureBlob],
-  );
-
-  // Auto capture: interval cố định, không chờ upload xong mới chụp tiếp
-  useEffect(() => {
-    if (!autoCapture || !showCamera) return undefined;
-
-    const tick = () => {
-      const projectedTotal = images.length + inFlightUploadsRef.current;
-      if (projectedTotal >= MAX_TRAINING_IMAGES_PER_STUDENT) {
-        setAutoCapture(false);
-        setSuccess(`Đã thu thập đủ ảnh huấn luyện (${MAX_TRAINING_IMAGES_PER_STUDENT}).`);
-        setTimeout(() => setSuccess(null), 2500);
-        return;
-      }
-      handleCapture(true);
-    };
-
-    tick();
-    const id = setInterval(tick, AUTO_CAPTURE_INTERVAL_MS);
-    return () => clearInterval(id);
-  }, [autoCapture, showCamera, images.length, handleCapture]);
-
+  // ── Upload file từ máy ────────────────────────────────────────────────────
   const handleFileUpload = async (event) => {
     const files = event.target.files;
-    if (!files || files.length === 0) return;
-
-    setLoading(true);
-    setError(null);
+    if (!files?.length) return;
 
     const remaining = MAX_TRAINING_IMAGES_PER_STUDENT - images.length;
     if (remaining <= 0) {
       setError(`Đã đạt tối đa ${MAX_TRAINING_IMAGES_PER_STUDENT} ảnh.`);
-      setLoading(false);
       event.target.value = '';
       return;
     }
 
+    setLoading(true);
+    setError(null);
+
     const fileList = Array.from(files).slice(0, remaining);
-    if (fileList.length < files.length) {
-      setError(`Chỉ còn chỗ cho ${remaining} ảnh (tối đa ${MAX_TRAINING_IMAGES_PER_STUDENT}).`);
+    let ok = 0, fail = 0;
+
+    for (const file of fileList) {
+      try {
+        const fd = new FormData();
+        fd.append('file', file);
+        await axios.post(`${API}/training/upload-image/${maSV}`, fd);
+        ok++;
+      } catch {
+        fail++;
+      }
     }
 
-    let uploadedCount = 0;
-    let errorCount = 0;
-
-    try {
-      for (const file of fileList) {
-        try {
-          const formData = new FormData();
-          formData.append('file', file);
-          await axios.post(`${API}/training/upload-image/${maSV}`, formData);
-          uploadedCount++;
-        } catch (err) {
-          errorCount++;
-          console.error(`Error uploading ${file.name}:`, err);
-        }
-      }
-      
-      if (uploadedCount > 0) {
-        setSuccess(`Đã upload ${uploadedCount}/${fileList.length} ảnh thành công!`);
-        await fetchTrainingImages();
-        await fetchTrainingStatus();
-      }
-      
-      if (errorCount > 0) {
-        setError(`${errorCount} ảnh không thể upload. Vui lòng kiểm tra định dạng.`);
-      }
-      
-    } finally {
-      setLoading(false);
-      event.target.value = ''; // Reset input
+    if (ok > 0) {
+      setSuccess(`Đã upload ${ok} ảnh!`);
+      await fetchTrainingImages();
     }
+    if (fail > 0) setError(`${fail} ảnh không upload được.`);
+
+    setLoading(false);
+    event.target.value = '';
   };
 
+  // ── Xóa một ảnh ─────────────────────────────────────────────────────────
   const handleDeleteImage = async (filename) => {
-    if (!window.confirm('Bạn có chắc muốn xóa ảnh này?')) return;
-
+    if (!window.confirm('Xóa ảnh này?')) return;
     try {
-      await axios.delete(`${API}/training/image/${maSV}/${filename}`);
-      setSuccess('Đã xóa ảnh');
-      await fetchTrainingImages();
+      await axios.delete(
+        `${API}/training/image/${maSV}/${encodeURIComponent(filename)}`
+      );
+      setImages(prev => prev.filter(img => img.filename !== filename));
       await fetchTrainingStatus();
     } catch (err) {
+      console.error(err);
       setError('Lỗi khi xóa ảnh');
-      console.error('Delete error:', err);
     }
   };
 
+  // ── Xóa tất cả ────────────────────────────────────────────────────────────
   const handleDeleteAll = async () => {
-    if (!window.confirm(`Bạn có chắc muốn xóa tất cả ${images.length} ảnh?`)) return;
-
+    if (!window.confirm(`Xóa tất cả ${images.length} ảnh?`)) return;
     setLoading(true);
     try {
       await axios.delete(`${API}/training/remove/${maSV}`);
-      setSuccess('Đã xóa toàn bộ dữ liệu huấn luyện');
-      await fetchTrainingImages();
-      await fetchTrainingStatus();
+      setImages([]);
       setActiveStep(0);
-    } catch (err) {
-      setError('Lỗi khi xóa dữ liệu');
-      console.error('Delete all error:', err);
-    } finally {
-      setLoading(false);
+      await fetchTrainingStatus();
+    } catch {
+      setError('Lỗi khi xóa');
     }
+    setLoading(false);
   };
 
+  // ── Huấn luyện ────────────────────────────────────────────────────────────
   const handleTrain = async () => {
-    if (images.length < MIN_TRAINING_IMAGES_TO_RUN) {
-      setError(
-        `Cần ít nhất ${MIN_TRAINING_IMAGES_TO_RUN} ảnh để huấn luyện. Khuyến nghị từ ${RECOMMENDED_TRAINING_IMAGES} ảnh trở lên để nhận diện tốt.`,
-      );
+    const confirmed = images.filter(img => !img.isLocal);
+    if (confirmed.length < MIN_TRAINING_IMAGES_TO_RUN) {
+      setError(`Cần ít nhất ${MIN_TRAINING_IMAGES_TO_RUN} ảnh đã lưu. Hiện có ${confirmed.length}.`);
       return;
     }
 
     setLoading(true);
     setActiveStep(2);
     setTrainingProgress(0);
-    
-    // Simulate progress
-    const progressInterval = setInterval(() => {
-      setTrainingProgress(prev => {
-        if (prev >= 90) {
-          clearInterval(progressInterval);
-          return prev;
-        }
-        return prev + 10;
+
+    const iv = setInterval(() => {
+      setTrainingProgress(p => {
+        if (p >= 90) { clearInterval(iv); return p; }
+        return p + 10;
       });
     }, 500);
 
     try {
-      const response = await axios.post(`${API}/training/train/${maSV}`);
-      
-      clearInterval(progressInterval);
+      const res = await axios.post(`${API}/training/train/${maSV}`);
+      clearInterval(iv);
       setTrainingProgress(100);
-      
-      if (response.data.success) {
-        const d = response.data || {};
-        const baseline = 5733;
-        const processedThisTrain = Number(d.system_images_counter_added || d.raw_images_count || d.raw_embedding_count || 0);
-        const globalCounterAfter = Math.max(
-          baseline,
-          Number(d.system_images_counter_after || d.total_trained_images_all_students || 0),
+
+      if (res.data.success) {
+        const d         = res.data;
+        const processed = Number(d.system_images_counter_added || d.raw_images_count || 0);
+        const global    = Number(d.system_images_counter_after || d.total_trained_images_all_students || 0);
+        const studentC  = Number(d.student_images_counter_after || 0);
+        setSuccess(
+          `✅ Huấn luyện thành công! Xử lý ${processed} ảnh. Cộng dồn bạn: ${studentC}. Toàn hệ thống: ${global}.`
         );
-        const studentCounterAfter = Number(d.student_images_counter_after || 0);
-        const studentsCount = Math.max(baseline, Number(d.system_students_count || 0));
-        setSuccess(`✅ Huấn luyện thành công!
-- Đã xử lý ${processedThisTrain} ảnh huấn luyện trong lần này
-- Số lượng ảnh huấn luyện cộng dồn của bạn: ${studentCounterAfter}
-- Số lượng ảnh đã huấn luyện toàn hệ thống: ${globalCounterAfter}
-- Hệ thống có ${studentsCount} sinh viên
-`);
         setActiveStep(3);
         await fetchTrainingStatus();
       } else {
-        setError(response.data.message);
+        setError(res.data.message);
         setActiveStep(1);
       }
     } catch (err) {
-      clearInterval(progressInterval);
-      setError(formatApiError(err.response?.data?.detail, 'Lỗi khi huấn luyện model'));
+      clearInterval(iv);
+      setError(formatApiError(err.response?.data?.detail, 'Lỗi huấn luyện'));
       setActiveStep(1);
-      console.error('Training error:', err);
-    } finally {
-      setLoading(false);
-      setTimeout(() => setTrainingProgress(0), 2000);
     }
+
+    setLoading(false);
+    setTimeout(() => setTrainingProgress(0), 2000);
   };
 
-  const startAutoCapture = () => {
-    setShowCamera(true);
-    setAutoCapture(true);
-  };
-
-  const stopAutoCapture = () => {
-    setAutoCapture(false);
-    scheduleGalleryRefresh();
-    setSuccess(`Đã dừng chụp tự động. Thư viện hiện có ${images.length} ảnh — nên đạt ${RECOMMENDED_TRAINING_IMAGES}+ ảnh để nhận diện tốt.`);
-  };
-
+  // ── Render ────────────────────────────────────────────────────────────────
   if (!student) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4 }}>
@@ -407,7 +352,7 @@ function StudentTraining() {
     return (
       <Box sx={{ p: 2 }}>
         <Alert severity="warning" sx={{ mb: 2 }}>
-          Bạn chỉ huấn luyện nhận diện cho tài khoản của mình.
+          Bạn chỉ huấn luyện cho tài khoản của mình.
         </Alert>
         <Button onClick={() => navigate('/student/profile')} variant="outlined">
           Về hồ sơ của tôi
@@ -416,24 +361,29 @@ function StudentTraining() {
     );
   }
 
-  const progressPercentage = Math.min((images.length / RECOMMENDED_TRAINING_IMAGES) * 100, 100);
-  const isReadyToTrain = images.length >= MIN_TRAINING_IMAGES_TO_RUN;
-  const isOptimal = images.length >= RECOMMENDED_TRAINING_IMAGES;
-  const displayImageCount = images.length + pendingUploads;
+  const confirmedCount = images.filter(img => !img.isLocal).length;
+  const totalCount     = images.length;
+  const progressPct    = Math.min((confirmedCount / RECOMMENDED_TRAINING_IMAGES) * 100, 100);
+  const isReadyToTrain = confirmedCount >= MIN_TRAINING_IMAGES_TO_RUN;
+  const isOptimal      = confirmedCount >= RECOMMENDED_TRAINING_IMAGES;
 
   return (
     <Box>
       {/* Header */}
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
         <IconButton
-          onClick={() => (user?.role === 'STUDENT' ? navigate('/student/profile') : navigate('/students'))}
+          onClick={() =>
+            user?.role === 'STUDENT'
+              ? navigate('/student/profile')
+              : navigate('/students')
+          }
           color="primary"
         >
           <BackIcon />
         </IconButton>
-        <Box sx={{ ml: 2, flexGrow: 1 }}>
+        <Box sx={{ ml: 2 }}>
           <Typography variant="h4" fontWeight="bold">
-            Huấn luyện nhận diện - {student.ho_ten}
+            Huấn luyện nhận diện – {student.ho_ten}
           </Typography>
           <Typography variant="body2" color="text.secondary">
             Mã SV: {student.ma_sv} | Lớp: {student.lop}
@@ -441,94 +391,65 @@ function StudentTraining() {
         </Box>
       </Box>
 
-      {/* Alerts */}
-      {error && (
-        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
-          {error}
-        </Alert>
-      )}
-
-      {success && (
-        <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccess(null)}>
-          {success}
-        </Alert>
-      )}
+      {error   && <Alert severity="error"   sx={{ mb: 2 }} onClose={() => setError(null)}>{error}</Alert>}
+      {success && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccess(null)}>{success}</Alert>}
 
       {/* Stepper */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Stepper activeStep={activeStep}>
-            {TRAINING_STEPS.map((label) => (
-              <Step key={label}>
-                <StepLabel>{label}</StepLabel>
-              </Step>
+            {TRAINING_STEPS.map(label => (
+              <Step key={label}><StepLabel>{label}</StepLabel></Step>
             ))}
           </Stepper>
         </CardContent>
       </Card>
 
-      {/* Training Status */}
+      {/* Status */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Grid container spacing={3} alignItems="center">
             <Grid item xs={12} md={3}>
               <Box sx={{ textAlign: 'center' }}>
-                <Typography variant="h2" color="primary" fontWeight="bold">
-                  {images.length}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Ảnh đã chụp
-                </Typography>
-                <Typography variant="caption" color="text.secondary">
-                  (Tối thiểu {MIN_TRAINING_IMAGES_TO_RUN} ảnh — nhận diện tốt với khoảng {RECOMMENDED_TRAINING_IMAGES} ảnh trở lên)
+                <Typography variant="h2" color="primary" fontWeight="bold">{totalCount}</Typography>
+                <Typography variant="body2" color="text.secondary">Ảnh đã chụp</Typography>
+                {totalCount !== confirmedCount && (
+                  <Typography variant="caption" color="warning.main">
+                    ({confirmedCount} đã lưu, {totalCount - confirmedCount} đang tải…)
+                  </Typography>
+                )}
+                <Typography variant="caption" color="text.secondary" display="block">
+                  Tối thiểu {MIN_TRAINING_IMAGES_TO_RUN} — tốt nhất {RECOMMENDED_TRAINING_IMAGES}+
                 </Typography>
               </Box>
             </Grid>
-            
+
             <Grid item xs={12} md={6}>
               <Box>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                  <Typography variant="body2" color="text.secondary">
-                    Tiến độ huấn luyện
-                  </Typography>
-                  <Typography variant="body2" fontWeight="bold">
-                    {progressPercentage.toFixed(0)}%
-                  </Typography>
+                  <Typography variant="body2" color="text.secondary">Tiến độ</Typography>
+                  <Typography variant="body2" fontWeight="bold">{progressPct.toFixed(0)}%</Typography>
                 </Box>
-                <LinearProgress 
-                  variant="determinate" 
-                  value={progressPercentage}
+                <LinearProgress
+                  variant="determinate"
+                  value={progressPct}
                   sx={{ height: 12, borderRadius: 6 }}
                   color={isOptimal ? 'success' : isReadyToTrain ? 'warning' : 'primary'}
                 />
                 <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
                   {isOptimal
-                    ? 'Đã đủ ảnh khuyến nghị — có thể huấn luyện ngay'
+                    ? 'Đủ ảnh — có thể huấn luyện ngay'
                     : isReadyToTrain
-                      ? `Đủ tối thiểu — nên thêm đến ${RECOMMENDED_TRAINING_IMAGES} ảnh để nhận diện ổn định`
-                      : `Cần thêm ${MIN_TRAINING_IMAGES_TO_RUN - images.length} ảnh nữa để bắt đầu huấn luyện`}
+                    ? `Đủ tối thiểu — nên thêm đến ${RECOMMENDED_TRAINING_IMAGES} ảnh`
+                    : `Cần thêm ${MIN_TRAINING_IMAGES_TO_RUN - confirmedCount} ảnh nữa`}
                 </Typography>
               </Box>
             </Grid>
 
-            <Grid item xs={12} md={3}>
-              <Box sx={{ textAlign: 'center' }}>
-                {trainingStatus?.in_database ? (
-                  <Chip 
-                    label="✅ Đã huấn luyện" 
-                    color="success" 
-                    icon={<CheckIcon />}
-                    sx={{ fontSize: '1rem', py: 2 }}
-                  />
-                ) : (
-                  <Chip 
-                    label="⏳ Chưa huấn luyện" 
-                    color="warning"
-                    icon={<WarningIcon />}
-                    sx={{ fontSize: '1rem', py: 2 }}
-                  />
-                )}
-              </Box>
+            <Grid item xs={12} md={3} sx={{ textAlign: 'center' }}>
+              {trainingStatus?.in_database
+                ? <Chip label="✅ Đã huấn luyện" color="success" icon={<CheckIcon />}   sx={{ fontSize: '1rem', py: 2 }} />
+                : <Chip label="⏳ Chưa huấn luyện" color="warning" icon={<WarningIcon />} sx={{ fontSize: '1rem', py: 2 }} />}
             </Grid>
           </Grid>
         </CardContent>
@@ -539,10 +460,10 @@ function StudentTraining() {
         <Grid item xs={12} sm={6} md={3}>
           <Button
             fullWidth
-            variant={showCamera ? "outlined" : "contained"}
+            variant={showCamera ? 'outlined' : 'contained'}
             color="primary"
             startIcon={<CameraIcon />}
-            onClick={() => setShowCamera(!showCamera)}
+            onClick={() => setShowCamera(v => !v)}
             size="large"
           >
             {showCamera ? 'Đóng Camera' : 'Mở Camera'}
@@ -554,9 +475,9 @@ function StudentTraining() {
             <Button
               fullWidth
               variant="contained"
-              color={autoCapture ? "error" : "success"}
+              color={autoCapture ? 'error' : 'success'}
               startIcon={autoCapture ? <CloseIcon /> : <PhotoIcon />}
-              onClick={autoCapture ? stopAutoCapture : startAutoCapture}
+              onClick={() => (autoCapture ? stopAutoCapture() : setAutoCapture(true))}
               size="large"
             >
               {autoCapture ? 'Dừng tự động' : 'Chụp tự động'}
@@ -612,25 +533,38 @@ function StudentTraining() {
         </Grid>
       </Grid>
 
-      {/* Camera — thu gọn chiều ngang; overlay ✓ không làm dịch chuyển layout (không spam Alert khi tự động) */}
+      {/* Camera */}
       {showCamera && (
         <Card sx={{ mb: 3 }}>
           <CardContent>
-            <Box
-              sx={{
-                maxWidth: { xs: '100%', sm: 440, md: 480 },
-                mx: 'auto',
-                width: '100%',
-              }}
-            >
+            <Box sx={{ maxWidth: { xs: '100%', sm: 440, md: 480 }, mx: 'auto' }}>
+
+              {/* Bộ đếm góc phải */}
+              <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 0.5, minHeight: 36 }}>
+                <Box
+                  sx={{
+                    display: 'inline-flex', alignItems: 'center', gap: 0.5,
+                    bgcolor: autoCapture ? 'error.main' : 'primary.main',
+                    color: '#fff', borderRadius: 2, px: 1.5, py: 0.5,
+                    fontWeight: 900, fontSize: '1.1rem', letterSpacing: 0.5, boxShadow: 2,
+                    ...(autoCapture && {
+                      animation: 'blink 1s linear infinite',
+                      '@keyframes blink': {
+                        '0%,49%': { opacity: 1 },
+                        '50%,100%': { opacity: 0.5 },
+                      },
+                    }),
+                  }}
+                >
+                  📸 {totalCount} / {RECOMMENDED_TRAINING_IMAGES}
+                </Box>
+              </Box>
+
+              {/* Webcam */}
               <Box
                 sx={{
-                  position: 'relative',
-                  backgroundColor: '#000',
-                  borderRadius: 2,
-                  overflow: 'hidden',
-                  width: '100%',
-                  aspectRatio: '16 / 9',
+                  position: 'relative', backgroundColor: '#000', borderRadius: 2,
+                  overflow: 'hidden', width: '100%', aspectRatio: '16/9',
                   maxHeight: { xs: 280, sm: 300, md: 320 },
                 }}
               >
@@ -638,97 +572,50 @@ function StudentTraining() {
                   ref={webcamRef}
                   audio={false}
                   screenshotFormat="image/jpeg"
-                  videoConstraints={{
-                    width: 1280,
-                    height: 720,
-                    facingMode: 'user',
-                  }}
+                  videoConstraints={{ width: 1280, height: 720, facingMode: 'user' }}
                   style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                 />
-
-                {autoCapture && (
-                  <Chip
-                    label={`Chụp nhanh (${displayImageCount}/${RECOMMENDED_TRAINING_IMAGES}+)`}
-                    color="error"
+                {captureFlash && (
+                  <Box
                     sx={{
-                      position: 'absolute',
-                      top: 16,
-                      right: 16,
-                      animation: 'blink 1.5s linear infinite',
-                      '@keyframes blink': {
-                        '0%, 49%': { opacity: 1 },
-                        '50%, 100%': { opacity: 0.5 },
-                      },
+                      position: 'absolute', inset: 0,
+                      background: 'rgba(16,185,129,0.3)',
+                      pointerEvents: 'none',
                     }}
                   />
                 )}
-
-                {captureOkFlash && (
-                  <Box
-                    sx={{
-                      position: 'absolute',
-                      inset: 0,
-                      background: 'rgba(16,185,129,0.22)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      pointerEvents: 'none',
-                    }}
-                  >
-                    <Chip
-                      icon={<CheckIcon />}
-                      label="✓ Đã chụp xong"
-                      color="success"
-                      sx={{ fontWeight: 900 }}
-                    />
-                  </Box>
-                )}
               </Box>
 
-              {/* Giữ cố định chiều cao vùng nút — tránh nhảy layout khi đổi chế độ */}
-              <Box
-                sx={{
-                  minHeight: 56,
-                  mt: 2,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                {autoCapture ? (
-                  <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center' }}>
-                    Đang chụp liên tục — giữ mặt trong khung, đổi góc nhẹ giữa các lần chụp.
-                  </Typography>
-                ) : (
-                  <Button
-                    variant="contained"
-                    color="primary"
-                    size="large"
-                    startIcon={<CameraIcon />}
-                    onClick={() => handleCapture(false)}
-                    disabled={capturing}
-                  >
-                    {capturing ? 'Đang lưu...' : 'Chụp ảnh'}
-                  </Button>
-                )}
+              <Box sx={{ minHeight: 56, mt: 2, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {autoCapture
+                  ? (
+                    <Typography variant="body2" color="text.secondary" textAlign="center">
+                      Đang chụp liên tục — đổi góc nhẹ để đa dạng dữ liệu.
+                    </Typography>
+                  ) : (
+                    <Button
+                      variant="contained"
+                      color="primary"
+                      size="large"
+                      startIcon={<CameraIcon />}
+                      onClick={captureOne}
+                    >
+                      Chụp ảnh
+                    </Button>
+                  )
+                }
               </Box>
             </Box>
-            
-            {/* Tips */}
+
             <Paper sx={{ mt: 2, p: 2, bgcolor: 'info.light' }}>
-              <Typography variant="subtitle2" fontWeight="bold" gutterBottom>
-                Mẹo chụp ảnh
-              </Typography>
+              <Typography variant="subtitle2" fontWeight="bold" gutterBottom>Mẹo chụp ảnh</Typography>
               <List dense>
-                {CAPTURE_TIPS.map((tip, index) => (
-                  <ListItem key={index}>
+                {CAPTURE_TIPS.map((tip, i) => (
+                  <ListItem key={i}>
                     <ListItemIcon sx={{ minWidth: 32 }}>
                       <InfoIcon fontSize="small" color="info" />
                     </ListItemIcon>
-                    <ListItemText 
-                      primary={tip}
-                      primaryTypographyProps={{ variant: 'body2' }}
-                    />
+                    <ListItemText primary={tip} primaryTypographyProps={{ variant: 'body2' }} />
                   </ListItem>
                 ))}
               </List>
@@ -741,35 +628,32 @@ function StudentTraining() {
       {loading && trainingProgress > 0 && (
         <Card sx={{ mb: 3 }}>
           <CardContent>
-            <Typography variant="h6" gutterBottom>
-              Đang huấn luyện…
-            </Typography>
-            <LinearProgress 
-              variant="determinate" 
+            <Typography variant="h6" gutterBottom>Đang huấn luyện…</Typography>
+            <LinearProgress
+              variant="determinate"
               value={trainingProgress}
               sx={{ height: 10, borderRadius: 5 }}
             />
             <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-              {trainingProgress}% —{' '}
+              {trainingProgress}%
+              {' — '}
               {trainingProgress < 30
-                ? 'Đang xử lý ảnh…'
+                ? 'Xử lý ảnh…'
                 : trainingProgress < 60
-                  ? 'Đang học khuôn mặt…'
-                  : trainingProgress < 90
-                    ? 'Đang lưu…'
-                    : 'Xong'}
+                ? 'Học khuôn mặt…'
+                : trainingProgress < 90
+                ? 'Lưu model…'
+                : 'Hoàn tất'}
             </Typography>
           </CardContent>
         </Card>
       )}
 
-      {/* Image Gallery */}
+      {/* Gallery */}
       <Card>
         <CardContent>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-            <Typography variant="h6">
-              Thư viện ảnh ({images.length})
-            </Typography>
+            <Typography variant="h6">Thư viện ảnh ({totalCount})</Typography>
             <Box>
               <IconButton onClick={fetchTrainingImages} color="primary">
                 <RefreshIcon />
@@ -791,37 +675,52 @@ function StudentTraining() {
           {images.length === 0 ? (
             <Box sx={{ textAlign: 'center', py: 6 }}>
               <CameraIcon sx={{ fontSize: 80, color: 'text.secondary', mb: 2 }} />
-              <Typography variant="h6" color="text.secondary" gutterBottom>
-                Chưa có ảnh nào
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                Chụp hoặc tải ảnh để bắt đầu.
-              </Typography>
+              <Typography variant="h6" color="text.secondary">Chưa có ảnh nào</Typography>
+              <Typography variant="body2" color="text.secondary">Chụp hoặc tải ảnh để bắt đầu.</Typography>
             </Box>
           ) : (
             <ImageList cols={4} gap={12}>
-              {images.map((img, index) => (
-                <ImageListItem key={index}>
-                  <img
-                    src={`${API}/training/image/${maSV}/${img.filename}`}
-                    alt={img.filename}
-                    loading="lazy"
-                    style={{ 
-                      height: 200, 
-                      objectFit: 'cover', 
-                      cursor: 'pointer',
-                      borderRadius: 8
-                    }}
-                    onClick={() => setSelectedImage(img)}
-                  />
+              {images.map((img, idx) => (
+                <ImageListItem key={img.localId ?? img.filename}>
+                  <Box sx={{ position: 'relative' }}>
+                    <img
+                      src={img.url}
+                      alt={img.filename}
+                      loading="lazy"
+                      style={{
+                        width: '100%', height: 160, objectFit: 'cover',
+                        borderRadius: 8, cursor: 'pointer',
+                        opacity: img.isLocal ? 0.65 : 1,
+                        transition: 'opacity 0.3s',
+                      }}
+                      onClick={() => setSelectedImage(img)}
+                    />
+                    {/* Spinner khi đang upload */}
+                    {img.isLocal && (
+                      <Box
+                        sx={{
+                          position: 'absolute', inset: 0, display: 'flex',
+                          alignItems: 'center', justifyContent: 'center',
+                          borderRadius: 2, bgcolor: 'rgba(0,0,0,0.25)',
+                        }}
+                      >
+                        <CircularProgress size={28} sx={{ color: '#fff' }} />
+                      </Box>
+                    )}
+                  </Box>
                   <ImageListItemBar
-                    title={`Ảnh ${index + 1}`}
-                    subtitle={`${(img.size / 1024).toFixed(1)} KB`}
+                    title={`Ảnh ${totalCount - idx}`}
+                    subtitle={img.isLocal ? 'Đang tải lên…' : `${(img.size / 1024).toFixed(1)} KB`}
                     actionIcon={
                       <IconButton
                         sx={{ color: 'white' }}
                         onClick={(e) => {
                           e.stopPropagation();
+                          if (img.isLocal) {
+                            // Xóa ảnh local chưa upload xong khỏi gallery
+                            setImages(prev => prev.filter(x => x.localId !== img.localId));
+                            return;
+                          }
                           handleDeleteImage(img.filename);
                         }}
                       >
@@ -836,13 +735,8 @@ function StudentTraining() {
         </CardContent>
       </Card>
 
-      {/* Image Preview Dialog */}
-      <Dialog
-        open={!!selectedImage}
-        onClose={() => setSelectedImage(null)}
-        maxWidth="md"
-        fullWidth
-      >
+      {/* Preview Dialog */}
+      <Dialog open={!!selectedImage} onClose={() => setSelectedImage(null)} maxWidth="md" fullWidth>
         {selectedImage && (
           <>
             <DialogTitle>
@@ -856,15 +750,15 @@ function StudentTraining() {
             </DialogTitle>
             <DialogContent>
               <img
-                src={`${API}/training/image/${maSV}/${selectedImage.filename}`}
+                src={selectedImage.url}
                 alt={selectedImage.filename}
                 style={{ width: '100%', height: 'auto', borderRadius: 8 }}
               />
             </DialogContent>
             <DialogActions>
               <Button onClick={() => setSelectedImage(null)}>Đóng</Button>
-              <Button 
-                color="error" 
+              <Button
+                color="error"
                 startIcon={<DeleteIcon />}
                 onClick={() => {
                   handleDeleteImage(selectedImage.filename);

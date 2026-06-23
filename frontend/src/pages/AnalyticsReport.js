@@ -38,7 +38,7 @@ import {
   PolarRadiusAxis,
   Radar,
 } from 'recharts';
-import { analyticsAPI, teacherAPI } from '../services/api';
+import { analyticsAPI, teacherAttendanceAPI } from '../services/api';
 import { useAuth } from '../auth/AuthContext';
 import { useI18n } from '../i18n/I18nContext';
 
@@ -86,13 +86,13 @@ function AnalyticsReport() {
 
         if (isTeacher) {
           const [ov, tr, st, top, risk, comp, rs] = await Promise.all([
-            teacherAPI.getAnalyticsOverview(),
-            teacherAPI.getAttendanceTrend(7),
-            teacherAPI.getStatusDistribution(),
-            teacherAPI.getTopStudents(5),
-            teacherAPI.getAtRiskStudents(),
-            teacherAPI.getClassComparison(),
-            teacherAPI.getRecentSessionStats(14),
+            teacherAttendanceAPI.getAnalyticsOverview(),
+            teacherAttendanceAPI.getAttendanceTrend(7),
+            teacherAttendanceAPI.getStatusDistribution(),
+            teacherAttendanceAPI.getTopStudents(5),
+            teacherAttendanceAPI.getAtRiskStudents(),
+            teacherAttendanceAPI.getClassComparison(),
+            teacherAttendanceAPI.getRecentSessionStats(14),
           ]);
           if (cancelled) return;
           setOverview(ov.data);

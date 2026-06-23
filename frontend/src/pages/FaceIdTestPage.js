@@ -22,17 +22,21 @@ import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import MasksIcon from '@mui/icons-material/Masks';
-import BackHandIcon from '@mui/icons-material/BackHand';
+import GroupsIcon from '@mui/icons-material/Groups';
 import { recognitionAPI } from '../services/api';
 import { buildRecognitionBlockNotice } from '../utils/recognitionFeedback';
 import CameraNoticeOverlay from '../components/CameraNoticeOverlay';
 import { useI18n } from '../i18n/I18nContext';
 import { useAuth } from '../auth/AuthContext';
 import { getStudentAvatarSrc, getStudentInitialLetter } from '../utils/studentAvatar';
+import BackHandIcon from '@mui/icons-material/BackHand';
+import { captureSequentialWebcamFrames, buildRecognizeLiveFormData } from '../utils/liveWebcamCapture';
+
+
 
 const videoConstraints = {
-  width: 1280,
-  height: 720,
+  width: 640,
+  height: 480,
   facingMode: 'user',
 };
 
@@ -53,6 +57,7 @@ export default function FaceIdTestPage() {
     if (kind === 'mask') return <MasksIcon sx={{ fontSize: 36, color: '#fff' }} />;
     if (kind === 'occluded') return <BackHandIcon sx={{ fontSize: 36, color: '#fff' }} />;
     if (kind === 'unknown_face') return <FaceRetouchingNaturalIcon sx={{ fontSize: 36, color: '#fff' }} />;
+    if (kind === 'multiple_faces') return <GroupsIcon sx={{ fontSize: 36, color: '#fff' }} />;
     return <ErrorOutlineIcon sx={{ fontSize: 36, color: '#fff' }} />;
   };
 
@@ -62,41 +67,35 @@ export default function FaceIdTestPage() {
     return String(user.ma_sv || '') === String(maSV || '');
   }, [user, maSV]);
 
-  const doFaceIdTest = async () => {
-    setRunning(true);
-    setError(null);
-    setResult(null);
-    setCameraNotice(null);
-    try {
-      const imageSrc = webcamRef.current?.getScreenshot?.();
-      if (!imageSrc) {
-        setError('Không lấy được hình từ webcam. Vui lòng kiểm tra quyền truy cập camera.');
-        return;
+const doFaceIdTest = async () => {
+  setRunning(true);
+  setError(null);
+  setResult(null);
+  setCameraNotice(null);
+  try {
+    const blobs = await captureSequentialWebcamFrames(webcamRef, { count: 3, gapMs: 250 });
+    const fd = buildRecognizeLiveFormData(blobs);
+    const res = await recognitionAPI.recognizeLiveFrames(fd);  // ← tên đúng
+    const data = res.data || {};
+    setResult(data);
+    if (data?.success) setAvatarKey((k) => k + 1);
+    if (!data.success) {
+      const blockNotice = buildRecognitionBlockNotice(data, t, 'Đã hiểu');
+      if (blockNotice) {
+        setCameraNotice({
+          ...blockNotice,
+          icon: noticeIconForKind(blockNotice.kind),
+        });
+      } else {
+        setError(data.message || 'Không xác thực được khuôn mặt. Vui lòng thử lại.');
       }
-
-      const blob = await fetch(imageSrc).then((r) => r.blob());
-      const file = new File([blob], 'faceid_test.jpg', { type: 'image/jpeg' });
-      const res = await recognitionAPI.recognizeFace(file);
-      const data = res.data || {};
-      setResult(data);
-      if (data?.success) setAvatarKey((k) => k + 1);
-      if (!data.success) {
-        const blockNotice = buildRecognitionBlockNotice(data, t, 'Đã hiểu');
-        if (blockNotice) {
-          setCameraNotice({
-            ...blockNotice,
-            icon: noticeIconForKind(blockNotice.kind),
-          });
-        } else {
-          setError(data.message || 'Không xác thực được khuôn mặt. Vui lòng thử lại.');
-        }
-      }
-    } catch (e) {
-      setError(e?.response?.data?.detail || e?.message || 'Lỗi khi kiểm tra Face ID.');
-    } finally {
-      setRunning(false);
     }
-  };
+  } catch (e) {
+    setError(e?.response?.data?.detail || e?.message || 'Lỗi khi kiểm tra Face ID.');
+  } finally {
+    setRunning(false);
+  }
+};
 
   const matchedCurrentStudent =
     result?.success && String(result?.student_info?.ma_sv || '') === String(maSV || '');
@@ -155,6 +154,7 @@ export default function FaceIdTestPage() {
                     audio={false}
                     mirrored
                     screenshotFormat="image/jpeg"
+                    screenshotQuality={0.7}
                     videoConstraints={videoConstraints}
                     style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                   />

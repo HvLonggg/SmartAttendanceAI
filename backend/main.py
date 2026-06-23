@@ -16,7 +16,12 @@ from pathlib import Path
 # Import training module
 from training_module import training_manager, MAX_TRAINING_IMAGES_PER_STUDENT, TRAINING_IMAGES_BASELINE
 from face_db_store import load_face_database
-from face_pipeline import extract_embedding_from_bytes, aligned_face_rgb_u8_from_bgr, pipeline_status
+from face_pipeline import (
+    extract_embedding_from_bytes,
+    aligned_face_rgb_u8_from_bgr,
+    pipeline_status,
+    count_faces_in_bytes,
+)
 from face_occlusion import (
     occlusion_api_fields,
     check_face_occlusion_bgr,
@@ -83,13 +88,43 @@ class StudentInfo(BaseModel):
     lop: Optional[str]
     khoa: Optional[str]
     email: Optional[str]
-    trang_thai: Optional[str]
+    trang_thai: Optional[str] = 'Đang học'
     anh_dai_dien: Optional[str] = None  # tên file trong thư mục avatars/ (vd: 2025001.jpg)
 
 
 class StudentSelfProfileUpdate(BaseModel):
     ho_ten: Optional[str] = None
     email: Optional[str] = None
+
+
+class AdminStudentUpdate(BaseModel):
+    ma_sv: Optional[str] = None
+    ho_ten: Optional[str] = None
+    ngay_sinh: Optional[date] = None
+    gioi_tinh: Optional[str] = None
+    lop: Optional[str] = None
+    khoa: Optional[str] = None
+    email: Optional[str] = None
+    trang_thai: Optional[str] = None
+
+
+class TeacherInfo(BaseModel):
+    ma_gv: str
+    ho_ten: str
+    email: Optional[str] = None
+    dien_thoai: Optional[str] = None
+    ma_khoa: Optional[str] = None
+    trang_thai: Optional[str] = 'Đang dạy'
+    anh_dai_dien: Optional[str] = None
+
+
+class AdminTeacherUpdate(BaseModel):
+    ma_gv: Optional[str] = None
+    ho_ten: Optional[str] = None
+    email: Optional[str] = None
+    dien_thoai: Optional[str] = None
+    ma_khoa: Optional[str] = None
+    trang_thai: Optional[str] = None
 
 
 class StudentFeedbackCreate(BaseModel):
@@ -149,6 +184,57 @@ def sinhvien_row_to_student(row) -> StudentInfo:
         gioi_tinh=row[3], lop=row[4], khoa=row[5],
         email=row[6], trang_thai=row[7], anh_dai_dien=anh,
     )
+
+
+def giangvien_row_to_teacher(row) -> TeacherInfo:
+    row = tuple(row)
+    return TeacherInfo(
+        ma_gv=row[0],
+        ho_ten=row[1],
+        email=row[2],
+        dien_thoai=row[3],
+        trang_thai=row[4] if len(row) > 4 and row[4] else "Đang dạy",
+        ma_khoa=(str(row[5]).strip() if len(row) > 5 and row[5] else None) or None,
+        anh_dai_dien=(str(row[6]).strip() if len(row) > 6 and row[6] else None) or None,
+    )
+
+
+def _rename_student_ma_sv(cursor, old_ma: str, new_ma: str) -> None:
+    """Đổi khóa MaSV và đồng bộ các bảng liên quan."""
+    cursor.execute("SELECT COUNT(*) FROM dbo.SinhVien WHERE MaSV = ?", (new_ma,))
+    if cursor.fetchone()[0] > 0:
+        raise HTTPException(status_code=400, detail="Mã sinh viên mới đã tồn tại")
+
+    for sql in (
+        "UPDATE dbo.DangKyHoc SET MaSV = ? WHERE MaSV = ?",
+        "UPDATE dbo.DiemDanh SET MaSV = ? WHERE MaSV = ?",
+        "UPDATE dbo.PhanHoiSinhVien SET MaSV = ? WHERE MaSV = ?",
+        "UPDATE dbo.NguoiDung SET MaSV = ? WHERE MaSV = ? AND Role = N'STUDENT'",
+    ):
+        cursor.execute(sql, (new_ma, old_ma))
+
+    cursor.execute("UPDATE dbo.SinhVien SET MaSV = ? WHERE MaSV = ?", (new_ma, old_ma))
+
+    cursor.execute("SELECT AnhDaiDien FROM dbo.SinhVien WHERE MaSV = ?", (new_ma,))
+    av_row = cursor.fetchone()
+    if av_row and av_row[0]:
+        old_file = os.path.join(AVATARS_DIR, str(av_row[0]))
+        if os.path.isfile(old_file) and old_ma in str(av_row[0]):
+            ext = os.path.splitext(old_file)[1] or ".jpg"
+            new_name = f"{new_ma}{ext}"
+            new_file = os.path.join(AVATARS_DIR, new_name)
+            if old_file != new_file:
+                if os.path.isfile(new_file):
+                    os.remove(new_file)
+                os.rename(old_file, new_file)
+                cursor.execute(
+                    "UPDATE dbo.SinhVien SET AnhDaiDien = ? WHERE MaSV = ?",
+                    (new_name, new_ma),
+                )
+
+    training_manager.rename_student_identity(old_ma, new_ma)
+    global face_database
+    face_database = load_face_database()
 
 
 ensure_anh_dai_dien_column()
@@ -347,10 +433,96 @@ MSG_SINHVIEN_RECORD_MISSING = (
     "Không tìm thấy hồ sơ sinh viên trong hệ thống quản lý. Vui lòng liên hệ quản trị viên."
 )
 
+MSG_MULTIPLE_FACES_DETECTED = (
+    "Phát hiện {count} khuôn mặt trong khung hình. "
+    "Chỉ một người được phép đứng trước camera để định danh."
+)
 
-def _mask_block_response_from_bytes(image_bytes: bytes, extra: Optional[dict] = None) -> Optional[dict]:
+
+def _multiple_faces_block_response(face_count: int, extra: Optional[dict] = None) -> dict:
+    payload = {
+        "success": False,
+        "multiple_faces_detected": True,
+        "face_count": int(face_count),
+        "message": MSG_MULTIPLE_FACES_DETECTED.format(count=int(face_count)),
+        "identity": None,
+        "confidence": 0,
+    }
+    if extra:
+        payload.update(extra)
+    return payload
+
+
+def _multiple_faces_block_from_bytes(image_bytes: bytes, extra: Optional[dict] = None) -> Optional[dict]:
+    count = count_faces_in_bytes(image_bytes)
+    if count >= 2:
+        return _multiple_faces_block_response(count, extra)
+    return None
+
+
+def _multiple_faces_block_from_frames(frames: List[bytes], extra: Optional[dict] = None) -> Optional[dict]:
+    max_count = 0
+    for b in frames:
+        c = count_faces_in_bytes(b)
+        if c > max_count:
+            max_count = c
+        if max_count >= 2:
+            return _multiple_faces_block_response(max_count, extra)
+    return None
+
+
+def _is_strong_occlusion_message(occ_msg: Optional[str]) -> bool:
+    """
+    Chỉ coi là che khuất khi thông điệp thật sự rõ ràng.
+    Các cảnh báo mơ hồ / nhẹ sẽ không chặn nhận diện để tránh spam lỗi.
+    """
+    msg = (occ_msg or "").strip().lower()
+    if not msg:
+        return False
+
+    strong_phrases = (
+        "khẩu trang",
+        "mask",
+        "che mặt",
+        "mặt bị che",
+        "không thấy khuôn mặt",
+        "không thấy mặt",
+        "không nhìn thấy khuôn mặt",
+        "không nhìn thấy mặt",
+        "che khuất nghiêm trọng",
+        "vật che",
+        "occluded",
+        "blocked",
+        "cản trở nghiêm trọng",
+    )
+    mild_phrases = (
+        "nhẹ",
+        "một phần",
+        "thoáng",
+        "ít",
+        "gần",
+        "mờ nhẹ",
+        "che khuất nhẹ",
+        "có thể",
+    )
+
+    if any(p in msg for p in strong_phrases):
+        return True
+
+    if ("che" in msg or "khuất" in msg or "occlu" in msg) and not any(p in msg for p in mild_phrases):
+        return True
+
+    return False
+
+
+def _mask_block_response_from_bytes(
+    image_bytes: bytes,
+    extra: Optional[dict] = None,
+    require_strong: bool = True,
+) -> Optional[dict]:
     """
     Kiểm tra khẩu trang/che mặt lần cuối — luôn ưu tiên hơn mọi kết quả nhận diện.
+    Chỉ chặn khi tín hiệu che khuất đủ rõ, tránh báo quá nhạy ở những khung hình nhiễu.
     Trả dict response API nếu bị chặn; None nếu không chặn.
     """
     nparr = np.frombuffer(image_bytes, dtype=np.uint8)
@@ -362,6 +534,8 @@ def _mask_block_response_from_bytes(image_bytes: bytes, extra: Optional[dict] = 
         return None
     blocked, _kind, occ_msg = check_face_occlusion_bgr(img, aligned)
     if not blocked or not occ_msg:
+        return None
+    if require_strong and not _is_strong_occlusion_message(occ_msg):
         return None
     payload = {
         "success": False,
@@ -430,12 +604,29 @@ def _parse_face_db_entry(entry: Any) -> Tuple[np.ndarray, np.ndarray]:
     return c, c.reshape(1, -1)
 
 
+def _topk_mean(values: np.ndarray, k: int = 3) -> float:
+    """Lấy trung bình k giá trị lớn nhất sau khi đã flatten."""
+    arr = np.asarray(values, dtype=np.float32).reshape(-1)
+    if arr.size == 0:
+        return 0.0
+    k = max(1, min(int(k), int(arr.size)))
+    if k == arr.size:
+        topk = np.sort(arr)[::-1]
+    else:
+        idx = np.argpartition(arr, -k)[-k:]
+        topk = np.sort(arr[idx])[::-1]
+    return float(np.mean(topk))
+
+
 def recognize_with_high_accuracy(embedding, threshold: Optional[float] = None):
     """
-    So khớp cosine trên vector đã L2-normalize (tương đương dot product).
-    RECOGNITION_THRESHOLD (mặc định 0.52): tăng nếu muốn ít chấp nhận nhầm hơn.
-    RECOGNITION_TOP_MARGIN: khoảng cách tối thiểu top1 - top2 để tránh nhầm giữa 2 người giống nhau.
-    Score dùng tổng hợp: alpha*centroid + (1-alpha)*best_sample (mặc định alpha=0.50).
+    Nhận diện khuôn mặt theo hướng an toàn hơn để giảm gán nhầm người lạ.
+
+    Điểm số cuối cùng không còn phụ thuộc vào 1 sample “ăn may”.
+    Quy tắc mới:
+    - centroid phải đủ gần
+    - nhóm sample tốt nhất phải ổn định (top-3 mean), không dùng max tuyệt đối để quyết định
+    - top1 phải tách đủ xa top2 nếu có nhiều ứng viên
     """
     global face_database
 
@@ -444,40 +635,57 @@ def recognize_with_high_accuracy(embedding, threshold: Optional[float] = None):
     if not face_database or embedding is None:
         return "Unknown", 0.0, []
 
-    thr = float(os.environ.get("RECOGNITION_THRESHOLD", "0.50")) if threshold is None else float(threshold)
-    margin_need = float(os.environ.get("RECOGNITION_TOP_MARGIN", "0.005"))
+    thr = float(os.environ.get("RECOGNITION_THRESHOLD", "0.60")) if threshold is None else float(threshold)
+    min_centroid = float(os.environ.get("RECOGNITION_MIN_CENTROID", "0.58"))
+    min_sample_mean = float(os.environ.get("RECOGNITION_MIN_SAMPLE_MEAN", "0.58"))
+    margin_need = float(os.environ.get("RECOGNITION_TOP_MARGIN", "0.03"))
 
     q = _l2_normalize_flat(embedding)
     scores = []
 
-    alpha = float(os.environ.get("RECOGNITION_ALPHA_CENTROID", "0.50"))
+    alpha = float(os.environ.get("RECOGNITION_ALPHA_CENTROID", "0.65"))
     alpha = min(1.0, max(0.0, alpha))
 
     for name, db_emb in face_database.items():
         try:
             centroid, samples = _parse_face_db_entry(db_emb)
+            sample_sims = (samples @ q.reshape(-1, 1)).reshape(-1)
+
             s_centroid = float(np.dot(q, centroid))
-            s_samples = samples @ q.reshape(-1, 1)
-            s_best = float(np.max(s_samples))
-            score = alpha * s_centroid + (1.0 - alpha) * s_best
-            scores.append((name, score, s_centroid, s_best))
+            s_best = float(np.max(sample_sims)) if sample_sims.size else 0.0
+            s_top3 = _topk_mean(sample_sims, 3)
+
+            # Không cho 1 sample lẻ quyết định identity.
+            score = alpha * s_centroid + (1.0 - alpha) * s_top3
+
+            # Ghi đủ debug để dễ kiểm tra khi cần.
+            scores.append((name, float(score), s_centroid, s_top3, s_best))
         except Exception:
             continue
 
     scores.sort(key=lambda x: x[1], reverse=True)
 
-    if not scores or scores[0][1] < thr:
-        return "Unknown", scores[0][1] if scores else 0.0, [(x[0], x[1]) for x in scores[:5]]
+    if not scores:
+        return "Unknown", 0.0, []
 
+    top1 = scores[0]
+    top1_score = float(top1[1])
+
+    # Điều kiện tuyệt đối: centroid và nhóm sample đều phải đủ tốt.
+    if (
+        top1_score < thr
+        or top1[2] < min_centroid
+        or top1[3] < min_sample_mean
+    ):
+        return "Unknown", top1_score, [(x[0], x[1]) for x in scores[:5]]
+
+    # Chặn trường hợp top1 chỉ nhỉnh hơn top2 một chút.
     if len(scores) >= 2:
-        gap = scores[0][1] - scores[1][1]
-        # Nếu top1 đủ cao vượt ngưỡng nhiều thì vẫn cho qua dù gap nhỏ
-        # (tránh reject nhầm trong điều kiện ánh sáng/độ phân giải không ổn định).
-        strong_top1_bonus = float(os.environ.get("RECOGNITION_STRONG_TOP1_BONUS", "0.03"))
-        if gap < margin_need and scores[0][1] < (thr + strong_top1_bonus):
-            return "Unknown", scores[0][1], [(x[0], x[1]) for x in scores[:5]]
+        gap = float(scores[0][1] - scores[1][1])
+        if gap < margin_need:
+            return "Unknown", top1_score, [(x[0], x[1]) for x in scores[:5]]
 
-    return scores[0][0], scores[0][1], [(x[0], x[1]) for x in scores[:5]]
+    return top1[0], top1_score, [(x[0], x[1]) for x in scores[:5]]
 
 
 def _calibrate_confidence(raw_conf: float, top_matches: List[Tuple[str, float]]) -> float:
@@ -560,6 +768,381 @@ async def create_student(student: StudentInfo):
         return {"success": True, "message": "Thêm sinh viên thành công"}
     except pyodbc.IntegrityError:
         raise HTTPException(status_code=400, detail="Mã sinh viên đã tồn tại")
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.put("/api/students/{ma_sv}")
+async def admin_update_student(
+    ma_sv: str,
+    body: AdminStudentUpdate,
+    current=Depends(require_role("ADMIN")),
+):
+    """Admin cập nhật hồ sơ sinh viên; đồng bộ họ tên/email sang tài khoản NguoiDung."""
+    if hasattr(body, "model_dump"):
+        updates = body.model_dump(exclude_unset=True)
+    else:
+        updates = body.dict(exclude_unset=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="Không có trường nào để cập nhật")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT * FROM SinhVien WHERE MaSV = ?", (ma_sv,))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Sinh viên không tồn tại")
+
+        current_st = sinhvien_row_to_student(row)
+        ho_ten = current_st.ho_ten
+        ngay_sinh = current_st.ngay_sinh
+        gioi_tinh = current_st.gioi_tinh
+        lop = current_st.lop
+        khoa = current_st.khoa
+        email = current_st.email
+        trang_thai = current_st.trang_thai or "Đang học"
+
+        if "ho_ten" in updates:
+            ht = (updates.get("ho_ten") or "").strip()
+            if not ht:
+                raise HTTPException(status_code=400, detail="Họ tên không hợp lệ")
+            ho_ten = ht
+        if "ngay_sinh" in updates:
+            ngay_sinh = updates.get("ngay_sinh")
+        if "gioi_tinh" in updates:
+            gioi_tinh = (updates.get("gioi_tinh") or "").strip() or None
+        if "lop" in updates:
+            lop = (updates.get("lop") or "").strip() or None
+        if "khoa" in updates:
+            khoa = (updates.get("khoa") or "").strip() or None
+        if "email" in updates:
+            email = (updates.get("email") or "").strip() or None
+        if "trang_thai" in updates:
+            tt = (updates.get("trang_thai") or "").strip()
+            if not tt:
+                raise HTTPException(status_code=400, detail="Trạng thái không hợp lệ")
+            trang_thai = tt
+
+        target_ma = ma_sv
+        if "ma_sv" in updates:
+            new_ma = (updates.get("ma_sv") or "").strip()
+            if not new_ma:
+                raise HTTPException(status_code=400, detail="Mã sinh viên không hợp lệ")
+            if new_ma != ma_sv:
+                _rename_student_ma_sv(cursor, ma_sv, new_ma)
+                target_ma = new_ma
+
+        cursor.execute(
+            """
+            UPDATE dbo.SinhVien
+            SET HoTen = ?, NgaySinh = ?, GioiTinh = ?, Lop = ?, Khoa = ?, Email = ?, TrangThai = ?
+            WHERE MaSV = ?
+            """,
+            (ho_ten, ngay_sinh, gioi_tinh, lop, khoa, email, trang_thai, target_ma),
+        )
+
+        nd_sets = []
+        nd_params = []
+        if "ho_ten" in updates:
+            nd_sets.append("HoTen = ?")
+            nd_params.append(ho_ten)
+        if "email" in updates:
+            nd_sets.append("Email = ?")
+            nd_params.append(email)
+        if nd_sets:
+            nd_sets.append("UpdatedAt = SYSUTCDATETIME()")
+            cursor.execute(
+                f"UPDATE dbo.NguoiDung SET {', '.join(nd_sets)} WHERE MaSV = ? AND Role = N'STUDENT'",
+                (*nd_params, target_ma),
+            )
+
+        conn.commit()
+        cursor.execute("SELECT * FROM SinhVien WHERE MaSV = ?", (target_ma,))
+        updated_row = cursor.fetchone()
+        return {
+            "success": True,
+            "message": "Đã cập nhật thông tin sinh viên",
+            "student": sinhvien_row_to_student(updated_row),
+            "ma_sv": target_ma,
+        }
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.delete("/api/students/{ma_sv}")
+async def admin_delete_student(ma_sv: str, current=Depends(require_role("ADMIN"))):
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT COUNT(*) FROM dbo.SinhVien WHERE MaSV = ?", (ma_sv,))
+        if cursor.fetchone()[0] == 0:
+            raise HTTPException(status_code=404, detail="Sinh viên không tồn tại")
+
+        cursor.execute("DELETE FROM dbo.DiemDanh WHERE MaSV = ?", (ma_sv,))
+        cursor.execute("DELETE FROM dbo.DangKyHoc WHERE MaSV = ?", (ma_sv,))
+        cursor.execute("DELETE FROM dbo.PhanHoiSinhVien WHERE MaSV = ?", (ma_sv,))
+        cursor.execute("DELETE FROM dbo.NguoiDung WHERE MaSV = ? AND Role = N'STUDENT'", (ma_sv,))
+        cursor.execute("SELECT AnhDaiDien FROM dbo.SinhVien WHERE MaSV = ?", (ma_sv,))
+        av = cursor.fetchone()
+        cursor.execute("DELETE FROM dbo.SinhVien WHERE MaSV = ?", (ma_sv,))
+        conn.commit()
+
+        if av and av[0]:
+            av_path = os.path.join(AVATARS_DIR, str(av[0]))
+            if os.path.isfile(av_path):
+                os.remove(av_path)
+        training_manager.delete_all_training_images(ma_sv)
+        training_manager.remove_from_database(ma_sv)
+        global face_database
+        face_database = load_face_database()
+
+        return {"success": True, "message": "Đã xóa sinh viên khỏi hệ thống"}
+    finally:
+        cursor.close()
+        conn.close()
+
+
+# ==================== TEACHER APIs (ADMIN) ====================
+
+_TEACHER_SELECT = """
+    SELECT gv.MaGV, gv.HoTen, gv.Email, gv.DienThoai, gv.TrangThai, gv.MaKhoa, gv.AnhDaiDien
+    FROM dbo.GiangVien gv
+"""
+
+
+@app.get("/api/teachers", response_model=List[TeacherInfo])
+async def get_all_teachers(current=Depends(require_role("ADMIN"))):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(f"{_TEACHER_SELECT} ORDER BY gv.MaGV")
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return [giangvien_row_to_teacher(row) for row in rows]
+
+
+@app.get("/api/teachers/{ma_gv}", response_model=TeacherInfo)
+async def get_teacher(ma_gv: str, current=Depends(require_role("ADMIN"))):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(f"{_TEACHER_SELECT} WHERE gv.MaGV = ?", (ma_gv,))
+    row = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Giảng viên không tồn tại")
+    return giangvien_row_to_teacher(row)
+
+
+@app.post("/api/teachers")
+async def create_teacher(teacher: TeacherInfo, current=Depends(require_role("ADMIN"))):
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            INSERT INTO dbo.GiangVien (MaGV, HoTen, Email, DienThoai, TrangThai, MaKhoa)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                teacher.ma_gv.strip(),
+                teacher.ho_ten.strip(),
+                teacher.email,
+                teacher.dien_thoai,
+                teacher.trang_thai or "Đang dạy",
+                teacher.ma_khoa,
+            ),
+        )
+        conn.commit()
+        return {"success": True, "message": "Thêm giảng viên thành công"}
+    except pyodbc.IntegrityError:
+        raise HTTPException(status_code=400, detail="Mã giảng viên đã tồn tại")
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.put("/api/teachers/{ma_gv}")
+async def admin_update_teacher(
+    ma_gv: str,
+    body: AdminTeacherUpdate,
+    current=Depends(require_role("ADMIN")),
+):
+    if hasattr(body, "model_dump"):
+        updates = body.model_dump(exclude_unset=True)
+    else:
+        updates = body.dict(exclude_unset=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="Không có trường nào để cập nhật")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(f"{_TEACHER_SELECT} WHERE gv.MaGV = ?", (ma_gv,))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Giảng viên không tồn tại")
+
+        current_t = giangvien_row_to_teacher(row)
+        target_ma = ma_gv
+        ho_ten = current_t.ho_ten
+        email = current_t.email
+        dien_thoai = current_t.dien_thoai
+        ma_khoa = current_t.ma_khoa
+        trang_thai = current_t.trang_thai or "Đang dạy"
+
+        if "ma_gv" in updates:
+            new_ma = (updates.get("ma_gv") or "").strip()
+            if not new_ma:
+                raise HTTPException(status_code=400, detail="Mã giảng viên không hợp lệ")
+            if new_ma != ma_gv:
+                cursor.execute("SELECT COUNT(*) FROM dbo.GiangVien WHERE MaGV = ?", (new_ma,))
+                if cursor.fetchone()[0] > 0:
+                    raise HTTPException(status_code=400, detail="Mã giảng viên mới đã tồn tại")
+                cursor.execute("UPDATE dbo.LopHocPhan SET MaGV = ? WHERE MaGV = ?", (new_ma, ma_gv))
+                cursor.execute(
+                    "UPDATE dbo.NguoiDung SET MaGV = ? WHERE MaGV = ? AND Role = N'TEACHER'",
+                    (new_ma, ma_gv),
+                )
+                cursor.execute("UPDATE dbo.GiangVien SET MaGV = ? WHERE MaGV = ?", (new_ma, ma_gv))
+                target_ma = new_ma
+
+        if "ho_ten" in updates:
+            ht = (updates.get("ho_ten") or "").strip()
+            if not ht:
+                raise HTTPException(status_code=400, detail="Họ tên không hợp lệ")
+            ho_ten = ht
+        if "email" in updates:
+            email = (updates.get("email") or "").strip() or None
+        if "dien_thoai" in updates:
+            dien_thoai = (updates.get("dien_thoai") or "").strip() or None
+        if "ma_khoa" in updates:
+            ma_khoa = (updates.get("ma_khoa") or "").strip() or None
+        if "trang_thai" in updates:
+            tt = (updates.get("trang_thai") or "").strip()
+            if not tt:
+                raise HTTPException(status_code=400, detail="Trạng thái không hợp lệ")
+            trang_thai = tt
+
+        cursor.execute(
+            """
+            UPDATE dbo.GiangVien
+            SET HoTen = ?, Email = ?, DienThoai = ?, MaKhoa = ?, TrangThai = ?
+            WHERE MaGV = ?
+            """,
+            (ho_ten, email, dien_thoai, ma_khoa, trang_thai, target_ma),
+        )
+        cursor.execute(
+            "UPDATE dbo.LopHocPhan SET GiangVien = ? WHERE MaGV = ?",
+            (ho_ten, target_ma),
+        )
+
+        nd_sets = []
+        nd_params = []
+        if "ho_ten" in updates:
+            nd_sets.append("HoTen = ?")
+            nd_params.append(ho_ten)
+        if "email" in updates:
+            nd_sets.append("Email = ?")
+            nd_params.append(email)
+        if "dien_thoai" in updates:
+            nd_sets.append("Phone = ?")
+            nd_params.append(dien_thoai)
+        if nd_sets:
+            nd_sets.append("UpdatedAt = SYSUTCDATETIME()")
+            cursor.execute(
+                f"UPDATE dbo.NguoiDung SET {', '.join(nd_sets)} WHERE MaGV = ? AND Role = N'TEACHER'",
+                (*nd_params, target_ma),
+            )
+
+        conn.commit()
+        cursor.execute(f"{_TEACHER_SELECT} WHERE gv.MaGV = ?", (target_ma,))
+        updated_row = cursor.fetchone()
+        return {
+            "success": True,
+            "message": "Đã cập nhật thông tin giảng viên",
+            "teacher": giangvien_row_to_teacher(updated_row),
+            "ma_gv": target_ma,
+        }
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.delete("/api/teachers/{ma_gv}")
+async def admin_delete_teacher(ma_gv: str, current=Depends(require_role("ADMIN"))):
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT COUNT(*) FROM dbo.GiangVien WHERE MaGV = ?", (ma_gv,))
+        if cursor.fetchone()[0] == 0:
+            raise HTTPException(status_code=404, detail="Giảng viên không tồn tại")
+
+        cursor.execute(
+            "SELECT COUNT(*) FROM dbo.LopHocPhan WHERE LTRIM(RTRIM(ISNULL(MaGV,''))) = LTRIM(RTRIM(?))",
+            (ma_gv,),
+        )
+        if cursor.fetchone()[0] > 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Không thể xóa giảng viên đang được phân công lớp học phần",
+            )
+
+        cursor.execute("DELETE FROM dbo.NguoiDung WHERE MaGV = ? AND Role = N'TEACHER'", (ma_gv,))
+        cursor.execute("DELETE FROM dbo.GiangVien WHERE MaGV = ?", (ma_gv,))
+        conn.commit()
+        return {"success": True, "message": "Đã xóa giảng viên khỏi hệ thống"}
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.get("/api/admin/feedbacks")
+async def admin_list_feedbacks(current=Depends(require_role("ADMIN"))):
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT
+                ph.Id,
+                ph.LoaiPhanHoi,
+                ph.TieuDe,
+                ph.NoiDung,
+                ph.MaLHP,
+                ph.CreatedAt,
+                sv.MaSV,
+                sv.HoTen,
+                sv.AnhDaiDien,
+                sv.Lop,
+                sv.Khoa
+            FROM dbo.PhanHoiSinhVien ph
+            INNER JOIN dbo.SinhVien sv ON sv.MaSV = ph.MaSV
+            ORDER BY ph.CreatedAt DESC
+            """
+        )
+        rows = cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "loai": r[1],
+                "tieu_de": r[2],
+                "noi_dung": r[3],
+                "ma_lhp": r[4],
+                "created_at": (r[5].isoformat() + "Z") if r[5] else None,
+                "student": {
+                    "ma_sv": r[6],
+                    "ho_ten": r[7],
+                    "anh_dai_dien": r[8],
+                    "lop": r[9],
+                    "khoa": r[10],
+                },
+            }
+            for r in rows
+        ]
     finally:
         cursor.close()
         conn.close()
@@ -1788,20 +2371,24 @@ async def remove_student_training(ma_sv: str):
 
 # ==================== RECOGNITION APIs ====================
 
+@app.post("/api/recognize-face")
 @app.post("/api/recognize")
 async def recognize_face_endpoint(file: UploadFile = File(...)):
     """Nhận diện khuôn mặt - Độ chính xác cao"""
     try:
-        load_face_database()
         contents = await file.read()
 
-        mask_block = _mask_block_response_from_bytes(contents)
+        multi_block = _multiple_faces_block_from_bytes(contents)
+        if multi_block:
+            return multi_block
+
+        mask_block = _mask_block_response_from_bytes(contents, require_strong=True)
         if mask_block:
             return mask_block
 
         # Extract embedding
         embedding, error = extract_embedding_high_quality(contents)
-        
+
         if error:
             return {
                 "success": False,
@@ -1811,18 +2398,10 @@ async def recognize_face_endpoint(file: UploadFile = File(...)):
                 **occlusion_api_fields(error),
             }
 
-        mask_block = _mask_block_response_from_bytes(contents)
-        if mask_block:
-            return mask_block
-        
         # Recognize
         identity, confidence, top_matches = recognize_with_high_accuracy(embedding)
         confidence_ui = _calibrate_confidence(confidence, top_matches)
 
-        mask_block = _mask_block_response_from_bytes(contents)
-        if mask_block:
-            return mask_block
-        
         if identity == "Unknown":
             return {
                 "success": False,
@@ -1832,7 +2411,7 @@ async def recognize_face_endpoint(file: UploadFile = File(...)):
                 "confidence": float(confidence_ui),
                 "top_matches": [{"identity": m[0], "score": float(m[1])} for m in top_matches]
             }
-        
+
         # Get student info
         conn = get_connection()
         cursor = conn.cursor()
@@ -1840,7 +2419,7 @@ async def recognize_face_endpoint(file: UploadFile = File(...)):
         row = cursor.fetchone()
         cursor.close()
         conn.close()
-        
+
         if row:
             # Online learning: cộng dồn mẫu từ lần nhận diện chắc chắn để cải thiện dần độ ổn định.
             training_manager.append_online_sample(identity, embedding, confidence)
@@ -1863,7 +2442,7 @@ async def recognize_face_endpoint(file: UploadFile = File(...)):
                 },
                 "top_matches": [{"identity": m[0], "score": float(m[1])} for m in top_matches[:3]]
             }
-        
+
         return {
             "success": False,
             "sinhvien_record_missing": True,
@@ -1871,7 +2450,7 @@ async def recognize_face_endpoint(file: UploadFile = File(...)):
             "identity": identity,
             "confidence": float(confidence_ui)
         }
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1883,7 +2462,6 @@ async def recognize_live_endpoint(frames: List[UploadFile] = File(...)):
     (hạn chế ảnh/video hiển thị trên màn hình thiết bị). Ảnh cuối dùng để trích embedding danh tính.
     """
     try:
-        load_face_database()
         if not frames:
             return {
                 "success": False,
@@ -1897,7 +2475,12 @@ async def recognize_live_endpoint(frames: List[UploadFile] = File(...)):
         for uf in frames:
             raw.append(await uf.read())
 
+        multi_block = _multiple_faces_block_from_frames(raw, {"liveness_failed": False})
+        if multi_block:
+            return multi_block
+
         ok, lmsg = verify_live_attendance_frames(raw)
+        raw = raw[-3:]
         if not ok:
             occ_fields = occlusion_api_fields(lmsg)
             if occ_fields:
@@ -1939,18 +2522,23 @@ async def recognize_live_endpoint(frames: List[UploadFile] = File(...)):
                 **occlusion_api_fields(last_error),
             }
 
+        # Chỉ chặn khi có đủ số frame cùng báo che khuất mạnh.
+        strong_blocks = []
         for b in raw:
-            mask_block = _mask_block_response_from_bytes(b, {"liveness_failed": False})
+            mask_block = _mask_block_response_from_bytes(
+                b,
+                {"liveness_failed": False},
+                require_strong=True,
+            )
             if mask_block:
-                return mask_block
+                strong_blocks.append(mask_block)
+
+        required_blocks = 2 if len(raw) >= 2 else 1
+        if len(strong_blocks) >= required_blocks:
+            return strong_blocks[0]
 
         identity, confidence, top_matches = recognize_with_high_accuracy(embedding)
         confidence_ui = _calibrate_confidence(confidence, top_matches)
-
-        for b in raw:
-            mask_block = _mask_block_response_from_bytes(b, {"liveness_failed": False})
-            if mask_block:
-                return mask_block
 
         if identity == "Unknown":
             return {
@@ -2182,6 +2770,10 @@ async def checkin_attendance(request: Request):
                 "Không chấp nhận điểm danh bằng ảnh hoặc video hiển thị trên thiết bị khác."
             ),
         }
+
+    multi_block = _multiple_faces_block_from_frames(live_frames_bytes)
+    if multi_block:
+        return multi_block
 
     ok_live, live_msg = verify_live_attendance_frames(live_frames_bytes)
     if not ok_live:

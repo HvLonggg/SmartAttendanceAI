@@ -39,7 +39,7 @@ import {
   Cell,
 } from 'recharts';
 import { Navigate } from 'react-router-dom';
-import { analyticsAPI, teacherAPI, adminTeachingAPI } from '../services/api';
+import { analyticsAPI, teacherAPI, adminTeachingAPI, teacherAttendanceAPI } from '../services/api';
 import { useAuth } from '../auth/AuthContext';
 import { useI18n } from '../i18n/I18nContext';
 
@@ -109,7 +109,7 @@ function Dashboard() {
     try {
       setLoading(true);
       if (user?.role === 'TEACHER') {
-        const response = await teacherAPI.getAnalyticsSummary();
+        const response = await teacherAttendanceAPI.getAnalyticsSummary();
         setStats(response.data);
         setAdminOverview(null);
       } else if (user?.role === 'ADMIN') {

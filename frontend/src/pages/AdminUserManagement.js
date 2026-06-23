@@ -13,11 +13,35 @@ import {
   Button,
   Alert,
   Tooltip,
+  IconButton,
 } from '@mui/material';
+import Visibility from '@mui/icons-material/Visibility';
+import VisibilityOff from '@mui/icons-material/VisibilityOff';
 import { authAPI } from '../services/api';
 import { formatApiError } from '../utils/apiError';
 import { useAuth } from '../auth/AuthContext';
 import { useI18n } from '../i18n/I18nContext';
+
+function PasswordCell({ password, known, hiddenLabel, unknownLabel }) {
+  const [show, setShow] = useState(false);
+  if (!known || !password) {
+    return (
+      <Typography variant="body2" color="text.secondary">
+        {unknownLabel}
+      </Typography>
+    );
+  }
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, maxWidth: 200 }}>
+      <Typography variant="body2" fontFamily="monospace" noWrap sx={{ flex: 1 }}>
+        {show ? password : hiddenLabel}
+      </Typography>
+      <IconButton size="small" onClick={() => setShow((v) => !v)} aria-label="toggle password">
+        {show ? <VisibilityOff fontSize="small" /> : <Visibility fontSize="small" />}
+      </IconButton>
+    </Box>
+  );
+}
 
 export default function AdminUserManagement() {
   const { user } = useAuth();
@@ -97,6 +121,7 @@ export default function AdminUserManagement() {
                   <TableCell>{t('adminUserManagement.table.username')}</TableCell>
                   <TableCell>{t('adminUserManagement.table.role')}</TableCell>
                   <TableCell>{t('adminUserManagement.table.email')}</TableCell>
+                  <TableCell>{t('adminUserManagement.table.password')}</TableCell>
                   <TableCell>{t('adminUserManagement.table.verified')}</TableCell>
                   <TableCell>{t('adminUserManagement.table.locked')}</TableCell>
                   <TableCell>{t('adminUserManagement.table.actions')}</TableCell>
@@ -107,9 +132,27 @@ export default function AdminUserManagement() {
                   <TableRow key={r.username} hover>
                     <TableCell>
                       <Typography fontWeight={500}>{r.username}</Typography>
+                      {r.ma_sv && (
+                        <Typography variant="caption" color="text.secondary" display="block">
+                          {r.ma_sv}
+                        </Typography>
+                      )}
+                      {r.ma_gv && (
+                        <Typography variant="caption" color="text.secondary" display="block">
+                          {r.ma_gv}
+                        </Typography>
+                      )}
                     </TableCell>
                     <TableCell>{r.role}</TableCell>
                     <TableCell>{r.email}</TableCell>
+                    <TableCell>
+                      <PasswordCell
+                        password={r.password_display}
+                        known={r.password_known}
+                        hiddenLabel={t('adminUserManagement.passwordHidden')}
+                        unknownLabel={t('adminUserManagement.passwordUnknown')}
+                      />
+                    </TableCell>
                     <TableCell>
                       <Chip
                         label={r.is_verified ? t('adminUserManagement.verifiedYes') : t('adminUserManagement.verifiedNo')}
@@ -153,7 +196,7 @@ export default function AdminUserManagement() {
                 ))}
                 {rows.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={6} align="center">
+                    <TableCell colSpan={7} align="center">
                       {t('adminUserManagement.empty')}
                     </TableCell>
                   </TableRow>
@@ -166,4 +209,3 @@ export default function AdminUserManagement() {
     </Box>
   );
 }
-

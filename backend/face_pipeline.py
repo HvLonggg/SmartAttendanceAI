@@ -1,9 +1,6 @@
 """
 Pipeline nhận diện khuôn mặt: MTCNN (phát hiện + căn chỉnh) + InceptionResnetV1 FaceNet.
 
-Trước đây dùng YOLOv8n COCO (yolov8n.pt) — chỉ có class "person", không phải mặt,
-nên crop sai toàn thân → embedding kém, dễ nhận nhầm.
-
 MTCNN được thiết kế để ghép với FaceNet trong cùng thư viện facenet-pytorch.
 """
 
@@ -112,6 +109,51 @@ def _mtcnn_align_rgb_tensor(rgb: np.ndarray) -> Optional[torch.Tensor]:
     elif aligned.ndim == 4 and aligned.shape[0] > 1:
         aligned = aligned[:1]
     return aligned
+
+
+def count_faces_in_bgr(img_bgr: np.ndarray) -> int:
+    """
+    Đếm số khuôn mặt hợp lệ trong khung (dùng MTCNN.detect, không phụ thuộc keep_all).
+    Trả về số lượng tối đa qua các tỷ lệ ảnh để phát hiện chính xác khi có từ 2 người trở lên.
+    """
+    if img_bgr is None or img_bgr.size == 0:
+        return 0
+
+    mtcnn = get_mtcnn()
+    min_prob = float(os.environ.get("MTCNN_FACE_COUNT_MIN_PROB", "0.88"))
+
+    def _count_rgb(rgb: np.ndarray) -> int:
+        boxes, probs = mtcnn.detect(Image.fromarray(rgb))
+        if boxes is None:
+            return 0
+        if probs is None:
+            return int(len(boxes))
+        return sum(1 for p in probs if float(p) >= min_prob)
+
+    scales_str = os.environ.get("FACE_DISTANCE_SCALES", "1,1.5,2")
+    try:
+        scales = [float(x.strip()) for x in scales_str.split(",") if x.strip()]
+    except ValueError:
+        scales = [1.0, 1.5]
+    scales = [s for s in scales if s > 0] or [1.0]
+
+    max_count = 0
+    for bgr_src in (img_bgr, _enhance_low_light_bgr(img_bgr)):
+        rgb0 = cv2.cvtColor(bgr_src, cv2.COLOR_BGR2RGB)
+        for sc in scales:
+            rgb = _upscale_rgb_capped(rgb0, sc) if sc != 1.0 else rgb0
+            max_count = max(max_count, _count_rgb(rgb))
+            if max_count >= 2:
+                return max_count
+    return max_count
+
+
+def count_faces_in_bytes(image_bytes: bytes) -> int:
+    nparr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        return 0
+    return count_faces_in_bgr(img)
 
 
 def aligned_face_tensor_from_bgr(img_bgr: np.ndarray) -> Optional[torch.Tensor]:

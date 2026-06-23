@@ -15,6 +15,9 @@ const FALLBACK = {
   unknownFaceTitle: 'Khuôn mặt chưa có trong dữ liệu huấn luyện',
   unknownFaceMessage:
     'Nhận diện được khuôn mặt nhưng người này chưa có trong dữ liệu huấn luyện. Chỉ sử dụng được với sinh viên đã đăng ký huấn luyện khuôn mặt.',
+  multipleFacesTitle: 'Phát hiện nhiều khuôn mặt',
+  multipleFacesMessage:
+    'Phát hiện {count} khuôn mặt trong khung hình. Chỉ một người được phép đứng trước camera để định danh.',
 };
 
 function tr(t, key, fallback) {
@@ -74,6 +77,23 @@ export function getRecognitionBlockFeedback(result, t) {
     const message = result.message || tr(t, 'unknownFaceMessage');
     return {
       kind: 'unknown_face',
+      title,
+      message,
+      formatted: `${title}. ${message}`,
+    };
+  }
+
+  if (result.multiple_faces_detected) {
+    const title = tr(t, 'multipleFacesTitle');
+    const count = result.face_count || 2;
+    const template = tr(t, 'multipleFacesMessage');
+    const message =
+      result.message ||
+      (template.includes('{count}')
+        ? template.replace('{count}', String(count))
+        : template);
+    return {
+      kind: 'multiple_faces',
       title,
       message,
       formatted: `${title}. ${message}`,

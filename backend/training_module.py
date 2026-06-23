@@ -17,7 +17,7 @@ from face_db_store import atomic_pickle_dump, load_face_database
 MAX_TRAINING_IMAGES_PER_STUDENT = int(os.environ.get("MAX_TRAINING_IMAGES_PER_STUDENT", "1000"))
 MAX_EMBEDDING_SAMPLES_PER_STUDENT = int(os.environ.get("MAX_EMBEDDING_SAMPLES_PER_STUDENT", "20"))
 MAX_EMBEDDING_SAMPLES_AFTER_ONLINE = int(os.environ.get("MAX_EMBEDDING_SAMPLES_AFTER_ONLINE", "40"))
-ONLINE_LEARNING_MIN_CONFIDENCE = float(os.environ.get("ONLINE_LEARNING_MIN_CONFIDENCE", "0.62"))
+ONLINE_LEARNING_MIN_CONFIDENCE = float(os.environ.get("ONLINE_LEARNING_MIN_CONFIDENCE", "0.78"))
 TRAINING_IMAGES_BASELINE = int(os.environ.get("TRAINING_IMAGES_BASELINE", "5733"))
 
 class FaceTrainingManager:
@@ -398,6 +398,31 @@ class FaceTrainingManager:
             return True
         
         return False
+
+    def rename_student_identity(self, old_ma_sv: str, new_ma_sv: str) -> None:
+        """Đổi mã sinh viên trong thư mục training và face database."""
+        import shutil
+
+        old_raw = os.path.join(self.base_dir, old_ma_sv)
+        new_raw = os.path.join(self.base_dir, new_ma_sv)
+        if os.path.isdir(old_raw):
+            if os.path.isdir(new_raw):
+                shutil.rmtree(new_raw, ignore_errors=True)
+            shutil.move(old_raw, new_raw)
+
+        old_crop = os.path.join(self.cropped_dir, old_ma_sv)
+        new_crop = os.path.join(self.cropped_dir, new_ma_sv)
+        if os.path.isdir(old_crop):
+            if os.path.isdir(new_crop):
+                shutil.rmtree(new_crop, ignore_errors=True)
+            shutil.move(old_crop, new_crop)
+
+        if os.path.exists(self.model_path):
+            with open(self.model_path, "rb") as f:
+                face_db = pickle.load(f)
+            if old_ma_sv in face_db:
+                face_db[new_ma_sv] = face_db.pop(old_ma_sv)
+                atomic_pickle_dump(face_db, self.model_path)
 
 # Singleton instance
 training_manager = FaceTrainingManager()

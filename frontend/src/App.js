@@ -36,6 +36,9 @@ import TeacherProfilePage from './pages/teacher/TeacherProfilePage';
 import TeacherCareerPage from './pages/teacher/TeacherCareerPage';
 import TeacherStudentVerifyPage from './pages/teacher/TeacherStudentVerifyPage';
 import FaceIdTestPage from './pages/FaceIdTestPage';
+import TeacherList from './pages/TeacherList';
+import TeacherDetail from './pages/TeacherDetail';
+import AdminFeedbackPage from './pages/admin/AdminFeedbackPage';
 
 import LoginPage from './pages/auth/LoginPage';
 import RegisterPage from './pages/auth/RegisterPage';
@@ -108,6 +111,9 @@ function App() {
                       <Route path="admin/users" element={<AdminUserManagement />} />
                       <Route path="admin/classes" element={<AdminClassCreationPage />} />
                       <Route path="admin/teaching" element={<AdminTeachingManagementPage />} />
+                      <Route path="teachers" element={<TeacherList />} />
+                      <Route path="teachers/:maGV" element={<TeacherDetail />} />
+                      <Route path="admin/feedbacks" element={<AdminFeedbackPage />} />
                     </Route>
 
                     <Route path="*" element={<Navigate to="/dashboard" replace />} />
