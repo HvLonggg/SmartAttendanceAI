@@ -1,10 +1,5 @@
-<<<<<<< HEAD
 # SmartAttendanceAI# SmartAttendanceAI
-=======
-# SmartAttendanceAI
->>>>>>> fa2a1f221ae2c1b471d452baf6f63f95ef7c407b
 
-## Overview
 
 SmartAttendanceAI is an AI-based attendance system using face recognition to automate student attendance, reduce fraud, and improve accuracy.
 
@@ -46,7 +41,7 @@ uvicorn main:app --reload
 ```bash
 cd frontend
 npm install
-npm start
+npm run start
 ```
 
 ### Database
@@ -63,4 +58,4 @@ npm start
 
 ## Author
 
-Smart Data Challenge – Team Project
+Smart Data Challenge – Personal
